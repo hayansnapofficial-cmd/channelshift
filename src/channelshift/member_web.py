@@ -6,6 +6,7 @@ Codex identities are per member. Shared service credentials remain server-side.
 from __future__ import annotations
 
 import argparse
+import ipaddress
 import json
 import os
 import re
@@ -17,6 +18,7 @@ from http.server import ThreadingHTTPServer
 from pathlib import Path
 
 from .delivery_profile import standard_site_profile
+from .member_auth import normalize_client_ip
 from .delivery_workspace import DeliveryWorkspace
 from .store import ProjectStore, directory
 from .web import WEB, handler_factory, normalize_public_origin
@@ -42,10 +44,13 @@ AUTH_ERRORS = {'invalid_member_input': 400, 'invalid_input': 400, 'invalid_usern
                'member_not_found': 404, 'invalid_admin_request': 400}
 
 
-def member_handler_factory(auth, root, token=None, *, codex=None, services=None, public_origin=None):
+def member_handler_factory(auth, root, token=None, *, codex=None, services=None, public_origin=None,
+                           trusted_proxy=False):
     from .member_codex import MemberCodex
     from .shared_services import SharedServices, ServiceError
     public_origin = normalize_public_origin(public_origin) if public_origin is not None else None
+    if trusted_proxy and public_origin is None:
+        raise ValueError('invalid_proxy_configuration')
     root = Path(root)
     codex = codex if codex is not None else MemberCodex(root)
     services = services if services is not None else SharedServices(root / 'shared-services.sqlite3')
@@ -456,6 +461,17 @@ def member_handler_factory(auth, root, token=None, *, codex=None, services=None,
             except Exception as error:
                 self.auth_error(error)
 
+        def login_client_ip(self):
+            peer = normalize_client_ip(self.client_address[0])
+            if not trusted_proxy:
+                return peer
+            # Opt-in only for the dedicated local proxy, which overwrites this
+            # header. Forwarded/X-Forwarded-For and login JSON never grant identity.
+            values = self.headers.get_all('X-ChannelShift-Client-IP', [])
+            if not ipaddress.ip_address(peer).is_loopback or len(values) != 1:
+                raise ValueError('invalid_member_input')
+            return normalize_client_ip(values[0])
+
         def auth_post(self):
             fields = AUTH_INPUTS.get(self.path)
             if fields is None:
@@ -486,7 +502,7 @@ def member_handler_factory(auth, root, token=None, *, codex=None, services=None,
                 elif self.path == '/api/auth/login':
                     previous = self.session_token()
                     previous_user = auth.authenticate(previous) if previous else None
-                    result = auth.login(**data)
+                    result = auth.login(**data, client_ip=self.login_client_ip())
                     if previous:
                         auth.logout(previous)
                     self.set_session_cookie(result['session_token'])
@@ -519,6 +535,8 @@ def main():
     parser.add_argument('--port', type=int, default=5189)
     parser.add_argument('--public-origin', default=os.environ.get('CHANNELSHIFT_PUBLIC_ORIGIN'),
                         help='Exact HTTPS origin served by the local reverse proxy')
+    parser.add_argument('--trust-proxy-client-ip', action='store_true',
+                        help='Require X-ChannelShift-Client-IP overwritten by the dedicated local proxy')
     args = parser.parse_args()
     if not 1024 <= args.port <= 65535:
         parser.error('Port must be between 1024 and 65535')
@@ -526,10 +544,13 @@ def main():
         public_origin = normalize_public_origin(args.public_origin) if args.public_origin is not None else None
     except ValueError:
         parser.error('Public origin must be an HTTPS origin without credentials, path, query or fragment')
+    if args.trust_proxy_client_ip and public_origin is None:
+        parser.error('--trust-proxy-client-ip requires --public-origin')
     root = directory() / 'members'
     origin = public_origin or 'http://127.0.0.1:' + str(args.port)
     auth = MemberAuth(root / 'accounts.sqlite3', mailer=from_environment(origin))
-    handler = member_handler_factory(auth, root, public_origin=public_origin)
+    handler = member_handler_factory(auth, root, public_origin=public_origin,
+                                     trusted_proxy=args.trust_proxy_client_ip)
     with ThreadingHTTPServer(('127.0.0.1', args.port), handler) as server:
         print('ChannelShift members: ' + origin + '/login', file=sys.stderr)
         try:

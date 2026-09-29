@@ -10,15 +10,21 @@ Python 3.10 이상 환경에 검증한 ChannelShift wheel을 설치한다. 회�
 
 ```sh
 export CHANNELSHIFT_HOME=/absolute/path/on-confirmed-data-disk/channelshift-data
-python -m channelshift.member_web --port 5189 --public-origin https://channelshift.net
+python -m channelshift.member_web --port 5189 --public-origin https://channelshift.net --trust-proxy-client-ip
 ```
 
 실제 disk1의 마운트 경로는 서버에 접속해 확인한 뒤 위 경로에 적용한다. `--public-origin` 또는 `CHANNELSHIFT_PUBLIC_ORIGIN`은 고정 HTTPS origin을 지정한다. 서버는 계속 `127.0.0.1`에만 수신한다. 리버스 프록시가 공개 도메인의 Host/Origin을 보존해야 한다. 임의 Forwarded 헤더로 도메인을 바꾸지 않는다. 공개 모드는 Secure 세션 쿠키와 고정 이메일 인증 주소를 사용한다.
 
+공개 경로는 **Cloudflare Tunnel → nginx(127.0.0.1:5191) → 회원 서버(127.0.0.1:5189)**로 구성한다. 저장소의 `deploy/nginx.conf`는 로컬 터널에서 받은 `CF-Connecting-IP`로 접속자를 판정하고 `X-ChannelShift-Client-IP`를 `$remote_addr`로 덮어쓴다. 요청자가 보낸 같은 이름의 헤더를 그대로 전달하지 않는다. 이 설정과 앱의 `--trust-proxy-client-ip`를 함께 적용한다. 플래그를 켜면 루프백 프록시가 보낸 단일 IP 헤더가 없는 로그인은 거절한다. 앱 5189 포트는 외부에 직접 공개하지 않으며, 터널도 nginx를 우회하지 않는다.
+
+로컬 전용 실행에서는 이 플래그를 생략한다. 기본 모드는 임의의 전달 헤더를 무시하고 실제 소켓 접속자의 주소를 사용한다. 공개 프록시 뒤에서 플래그를 생략하면 모든 방문자가 프록시의 IP 예산을 공유하므로 배포 시 함께 확인한다. 이 신뢰 설정은 해당 호스트의 로컬 프로세스와 터널을 운영자가 통제한다는 전제다.
+
+기존 배포를 갱신할 때는 먼저 nginx에 헤더 덮어쓰기 설정을 적용·검사하고, 그다음 새 앱에서 신뢰 플래그를 켠다. 역순이면 헤더가 전달되기 전까지 로그인이 거절된다. 회원 DB와 저장한 설계는 보존하며, 계정 제한용 테이블과 스키마 저장 잠금 파일은 새 코드가 생성한다.
+
 현재 Windows PC에서는 이미 저장한 전용 SMTP 설정을 사용하는 다음 런처를 사용할 수 있다.
 
 ```powershell
-.\scripts\start-members.ps1 -Port 5189 -PublicOrigin https://channelshift.net
+.\scripts\start-members.ps1 -Port 5189 -PublicOrigin https://channelshift.net -TrustProxyClientIp
 ```
 
 로컬 전용 실행은 `-PublicOrigin`을 생략한다. 실행 계정이 바뀌면 개인 SMTP 파일 ACL과 Windows DPAPI 자격증명도 확인해야 한다.
@@ -40,7 +46,7 @@ tunnel: YOUR_TUNNEL_ID
 credentials-file: /private/path/YOUR_TUNNEL_ID.json
 ingress:
   - hostname: channelshift.net
-    service: http://127.0.0.1:5189
+    service: http://127.0.0.1:5191
   - service: http_status:404
 ```
 

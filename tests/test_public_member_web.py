@@ -1,5 +1,6 @@
 """Public-origin transport boundaries over a real loopback HTTP listener."""
 import http.client
+import hashlib
 import json
 from http.server import ThreadingHTTPServer
 from pathlib import Path
@@ -9,6 +10,7 @@ import unittest
 from unittest.mock import Mock, patch
 
 from channelshift.member_web import main, member_handler_factory
+from channelshift.member_auth import MemberAuth
 from channelshift.web import normalize_public_origin
 
 
@@ -26,6 +28,7 @@ class Identity:
         return member_id == self.user['id']
 
     def login(self, **_):
+        self.last_client_ip = _['client_ip']
         return {'session_token': 'synthetic-session-token', 'user': self.user}
 
     def logout(self, token):
@@ -55,7 +58,8 @@ class PublicOriginTests(unittest.TestCase):
                 normalize_public_origin(value)
 
     def test_launcher_keeps_loopback_and_configures_mail_with_public_origin(self):
-        with patch('sys.argv', ['members', '--port', '5199', '--public-origin', 'https://channelshift.example/']), \
+        with patch('sys.argv', ['members', '--port', '5199', '--public-origin', 'https://channelshift.example/',
+                                '--trust-proxy-client-ip']), \
                 patch('channelshift.member_web.directory', return_value=Path('/unused')), \
                 patch('channelshift.member_mail.from_environment') as mail, \
                 patch('channelshift.member_auth.MemberAuth') as auth, \
@@ -65,6 +69,7 @@ class PublicOriginTests(unittest.TestCase):
             main()
             mail.assert_called_once_with('https://channelshift.example')
             self.assertEqual(handler.call_args.kwargs['public_origin'], 'https://channelshift.example')
+            self.assertTrue(handler.call_args.kwargs['trusted_proxy'])
             self.assertEqual(server.call_args.args[0], ('127.0.0.1', 5199))
             self.assertEqual(auth.call_args.kwargs['mailer'], mail.return_value)
             handler.return_value.close_resources.assert_called_once()
@@ -78,6 +83,16 @@ class PublicOriginTests(unittest.TestCase):
                 main()
             directory.assert_not_called()
 
+    def test_trusted_proxy_requires_public_origin_before_opening_storage(self):
+        with patch('sys.argv', ['members', '--trust-proxy-client-ip']), \
+                patch.dict('os.environ', {}, clear=True), \
+                patch('channelshift.member_web.directory') as directory, patch('sys.stderr'):
+            with self.assertRaises(SystemExit):
+                main()
+            directory.assert_not_called()
+        with self.assertRaisesRegex(ValueError, '^invalid_proxy_configuration$'):
+            member_handler_factory(Mock(), '/unused', trusted_proxy=True)
+
 
 class PublicMemberHTTPTests(unittest.TestCase):
     def setUp(self):
@@ -85,7 +100,8 @@ class PublicMemberHTTPTests(unittest.TestCase):
         self.addCleanup(self.temp.cleanup)
         self.auth = Identity()
         self.handler = member_handler_factory(self.auth, Path(self.temp.name), 'csrf-synthetic',
-            codex=Mock(), services=Mock(), public_origin='https://channelshift.example')
+            codex=Mock(), services=Mock(), public_origin='https://channelshift.example',
+            trusted_proxy=getattr(self, 'trusted_proxy', False))
         self.server = ThreadingHTTPServer(('127.0.0.1', 0), self.handler)
         self.thread = threading.Thread(target=self.server.serve_forever, daemon=True)
         self.thread.start()
@@ -163,6 +179,71 @@ class PublicMemberHTTPTests(unittest.TestCase):
         for flag in ('__Host-channelshift_member=', 'Max-Age=0', 'Secure'):
             self.assertIn(flag, headers['Set-Cookie'])
         self.assertEqual(self.call('/api/studio/projects')[0], 401)
+
+    def test_forwarding_headers_are_ignored_without_explicit_trust(self):
+        status, _, _ = self.call('/api/auth/login', {'username': 'alice', 'password': 'synthetic-password'},
+            omit=('Cookie',), extra=[('X-ChannelShift-Client-IP', '192.0.2.1'),
+                                    ('X-ChannelShift-Client-IP', '198.51.100.1'),
+                                    ('X-Forwarded-For', '203.0.113.1'), ('CF-Connecting-IP', '192.0.2.9')])
+        self.assertEqual(status, 200)
+        self.assertEqual(self.auth.last_client_ip, '127.0.0.1')
+
+
+class TrustedProxyLoginHTTPTests(unittest.TestCase):
+    trusted_proxy = True
+    setUp = PublicMemberHTTPTests.setUp
+    stop = PublicMemberHTTPTests.stop
+    call = PublicMemberHTTPTests.call
+
+    def test_proxy_identity_is_canonical_and_other_forwarding_headers_have_no_authority(self):
+        for supplied, expected in [('192.0.2.1', '192.0.2.1'),
+                                   ('2001:0DB8:0:0:0:0:0:1', '2001:db8::1'),
+                                   ('::ffff:192.0.2.1', '192.0.2.1')]:
+            with self.subTest(ip=supplied):
+                status, _, _ = self.call('/api/auth/login', {'username': 'alice', 'password': 'synthetic-password'},
+                    omit=('Cookie',), extra=[('X-ChannelShift-Client-IP', supplied),
+                                            ('X-Forwarded-For', '198.51.100.1'), ('CF-Connecting-IP', '203.0.113.1')])
+                self.assertEqual(status, 200)
+                self.assertEqual(self.auth.last_client_ip, expected)
+
+    def test_malformed_missing_duplicate_proxy_identity_rejected_before_login(self):
+        variants = [[], [('X-ChannelShift-Client-IP', '192.0.2.1'), ('X-ChannelShift-Client-IP', '192.0.2.2')]]
+        variants += [[('X-ChannelShift-Client-IP', value)] for value in (
+            '', '192.0.2.1, 192.0.2.2', 'unknown', '127.0.0.1:1234', 'fe80::1%eth0', '0' * 100)]
+        for extra in variants:
+            with self.subTest(extra=extra), patch.object(self.auth, 'login') as login:
+                status, body, _ = self.call('/api/auth/login', {'username': 'alice', 'password': 'synthetic-password'},
+                    omit=('Cookie',), extra=extra)
+                self.assertEqual(status, 400)
+                self.assertEqual(json.loads(body)['error'], 'invalid_member_input')
+                login.assert_not_called()
+
+    def test_valid_header_from_nonloopback_peer_has_no_authority(self):
+        with patch.object(self.server, 'get_request', wraps=self.server.get_request) as accept:
+            original = accept._mock_wraps
+            def untrusted_peer():
+                connection, _ = original()
+                return connection, ('192.0.2.1', 4321)
+            accept.side_effect = untrusted_peer
+            with patch.object(self.auth, 'login') as login:
+                status, _, _ = self.call('/api/auth/login', {'username': 'alice', 'password': 'synthetic-password'},
+                    omit=('Cookie',), extra=[('X-ChannelShift-Client-IP', '203.0.113.1')])
+                self.assertEqual(status, 400)
+                login.assert_not_called()
+
+    def test_blocked_login_traffic_does_not_block_another_visitor(self):
+        with patch('channelshift.member_auth._derive', side_effect=lambda password, salt: hashlib.sha256(salt + password).digest()):
+            real = MemberAuth(Path(self.temp.name) / 'auth' / 'accounts.sqlite3')
+            real.bootstrap_master('valid_member', 'valid@example.test', 'synthetic-password')
+            self.auth.login = real.login
+            for _ in range(40):
+                status, _, _ = self.call('/api/auth/login', {'username': 'missing_user', 'password': 'wrong-password'},
+                    omit=('Cookie',), extra=[('X-ChannelShift-Client-IP', '192.0.2.1')])
+                self.assertIn(status, (401, 429))
+            status, body, _ = self.call('/api/auth/login', {'username': 'valid_member', 'password': 'synthetic-password'},
+                omit=('Cookie',), extra=[('X-ChannelShift-Client-IP', '192.0.2.2')])
+            self.assertEqual(status, 200)
+            self.assertEqual(json.loads(body)['user']['username'], 'valid_member')
 
 
 if __name__ == '__main__':

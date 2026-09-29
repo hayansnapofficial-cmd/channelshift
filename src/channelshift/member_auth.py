@@ -9,6 +9,7 @@ from __future__ import annotations
 from contextlib import contextmanager
 import hashlib
 import hmac
+import ipaddress
 import os
 from pathlib import Path
 import re
@@ -32,6 +33,10 @@ MAX_MEMBERS = 1000
 MAX_PENDING = 100
 MAX_SESSIONS_PER_USER = 5
 MAX_RATE_BUCKETS = 512
+MAX_LOGIN_CLIENTS = 1024
+MAX_UNKNOWN_LOGINS = 512
+LOGIN_CLIENT_LIMIT = 30
+LOGIN_ACCOUNT_LIMIT = 5
 MAX_AUDIT_RESULTS = 100
 RATE_WINDOW = 10 * 60
 _HASH_SLOTS = threading.BoundedSemaphore(1)
@@ -51,6 +56,19 @@ def normalize_username(value):
     if not _USERNAME.fullmatch(value):
         raise AuthError("invalid_username")
     return value
+
+
+def normalize_client_ip(value):
+    """Only transport-derived IPs; never an identity supplied in a login body."""
+    if type(value) is not str or len(value) > 45 or "%" in value:
+        raise AuthError("invalid_member_input")
+    try:
+        address = ipaddress.ip_address(value)
+    except ValueError:
+        raise AuthError("invalid_member_input") from None
+    if isinstance(address, ipaddress.IPv6Address) and address.ipv4_mapped:
+        address = address.ipv4_mapped
+    return str(address)
 
 
 def normalize_email(value):
@@ -171,6 +189,15 @@ class MemberAuth:
                 CREATE TABLE IF NOT EXISTS rate_limits (
                     bucket TEXT PRIMARY KEY, started REAL NOT NULL, count INTEGER NOT NULL
                 );
+                CREATE TABLE IF NOT EXISTS login_clients (
+                    bucket TEXT PRIMARY KEY, started REAL NOT NULL, count INTEGER NOT NULL
+                );
+                CREATE TABLE IF NOT EXISTS login_accounts (
+                    bucket TEXT PRIMARY KEY,
+                    member_id TEXT REFERENCES members(id) ON DELETE CASCADE,
+                    started REAL NOT NULL, count INTEGER NOT NULL
+                );
+                CREATE INDEX IF NOT EXISTS login_accounts_member ON login_accounts(member_id, started);
             """)
             # Upgrade pre-role databases without changing credentials, verification,
             # or ownership. Serialize migrations across independently started hosts.
@@ -212,6 +239,55 @@ class MemberAuth:
         db.execute("DELETE FROM sessions WHERE expires <= ?", (now,))
         db.execute("DELETE FROM service_tokens WHERE expires <= ?", (now,))
         db.execute("DELETE FROM rate_limits WHERE started <= ?", (now - RATE_WINDOW,))
+        db.execute("DELETE FROM login_clients WHERE started <= ?", (now - RATE_WINDOW,))
+        db.execute("DELETE FROM login_accounts WHERE started <= ?", (now - RATE_WINDOW,))
+
+    def _login_rate(self, username, client_ip):
+        """Reserve hash work per client and account, never against all members.
+
+        Existing members have one protected row each. Anonymous target and client
+        pools evict their oldest row when full, so filling a pool cannot lock out
+        a new client or evict a member's account budget. The hash semaphore remains
+        the global concurrent-work bound; this is not a distributed DoS shield.
+        """
+        now = self.clock()
+        client = hashlib.sha256(normalize_client_ip(client_ip).encode("ascii")).hexdigest()
+        account = hashlib.sha256(username.encode("ascii")).hexdigest()
+        limited = False
+        with self._connect() as db:
+            db.execute("BEGIN IMMEDIATE")
+            self._cleanup(db, now)
+            source = db.execute("SELECT count FROM login_clients WHERE bucket=?", (client,)).fetchone()
+            if source is not None and source[0] >= LOGIN_CLIENT_LIMIT:
+                limited = True
+            else:
+                if source is None:
+                    if db.execute("SELECT count(*) FROM login_clients").fetchone()[0] >= MAX_LOGIN_CLIENTS:
+                        db.execute("DELETE FROM login_clients WHERE bucket=(SELECT bucket FROM login_clients "
+                                   "ORDER BY started, rowid LIMIT 1)")
+                    db.execute("INSERT INTO login_clients VALUES (?, ?, 1)", (client, now))
+                else:
+                    db.execute("UPDATE login_clients SET count=count+1 WHERE bucket=?", (client,))
+                # Source rejection above never allocates or consumes target state.
+                member = db.execute("SELECT id FROM members WHERE username=?", (username,)).fetchone()
+                row = db.execute("SELECT count FROM login_accounts WHERE bucket=?", (account,)).fetchone()
+                if row is not None:
+                    # A previously unknown username may have registered meanwhile.
+                    db.execute("UPDATE login_accounts SET member_id=? WHERE bucket=?",
+                               (member[0] if member else None, account))
+                    if row[0] >= LOGIN_ACCOUNT_LIMIT:
+                        limited = True
+                    else:
+                        db.execute("UPDATE login_accounts SET count=count+1 WHERE bucket=?", (account,))
+                else:
+                    if member is None and db.execute(
+                            "SELECT count(*) FROM login_accounts WHERE member_id IS NULL").fetchone()[0] >= MAX_UNKNOWN_LOGINS:
+                        db.execute("DELETE FROM login_accounts WHERE bucket=(SELECT bucket FROM login_accounts "
+                                   "WHERE member_id IS NULL ORDER BY started, rowid LIMIT 1)")
+                    db.execute("INSERT INTO login_accounts VALUES (?, ?, ?, 1)",
+                               (account, member[0] if member else None, now))
+        if limited:
+            raise AuthError("rate_limited")
 
     def _rate(self, action, identity, account_limit, global_limit):
         """Persist attempts before password work, including failed attempts."""
@@ -421,12 +497,12 @@ class MemberAuth:
         with self._connect() as db:
             db.execute("DELETE FROM service_tokens WHERE member_id=?", (user_id,))
 
-    def login(self, username, password):
+    def login(self, username, password, *, client_ip="127.0.0.1"):
         try:
             username, encoded = normalize_username(username), _password(password, minimum=1)
         except AuthError:
             raise AuthError("invalid_credentials") from None
-        self._rate("login", username, 5, 30)
+        self._login_rate(username, client_ip)
         with self._connect() as db:
             row = db.execute("SELECT * FROM members WHERE username=?", (username,)).fetchone()
         # Missing users perform the same configured scrypt work as existing users.

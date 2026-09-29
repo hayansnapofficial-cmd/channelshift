@@ -1,8 +1,12 @@
 [CmdletBinding()]
-param([string]$Python, [ValidateRange(1024, 65535)][int]$Port = 5189, [string]$PublicOrigin)
+param([string]$Python, [ValidateRange(1024, 65535)][int]$Port = 5189, [string]$PublicOrigin,
+      [switch]$TrustProxyClientIp)
 
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
+if ($TrustProxyClientIp -and [string]::IsNullOrWhiteSpace($PublicOrigin)) {
+    throw 'TrustProxyClientIp requires PublicOrigin and a dedicated local proxy.'
+}
 
 function Assert-NoReparsePoint([string]$Path) {
     $cursor = [System.IO.Path]::GetFullPath($Path)
@@ -107,6 +111,7 @@ try {
     if (-not [string]::IsNullOrWhiteSpace($PublicOrigin)) {
         $memberArguments += @('--public-origin', $PublicOrigin)
     }
+    if ($TrustProxyClientIp) { $memberArguments += '--trust-proxy-client-ip' }
     & $Python @memberArguments
     if ($LASTEXITCODE -ne 0) { throw 'The member server stopped with an error.' }
 } finally {
