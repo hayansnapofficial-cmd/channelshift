@@ -128,17 +128,19 @@ class MemberAdminTests(unittest.TestCase):
         self.assertIsNone(self.row(master["id"])["verified"])
         self.assertEqual(self.auth.login("local_master", MASTER_PASSWORD)["user"], master)
 
-    def test_password_policy_distinguishes_local_bootstrap_from_public_member_flow(self):
+    def test_password_policy_uses_same_eight_character_minimum_for_master_and_members(self):
         for invalid in ("x" * 7, "x" * 129, "x" * 8 + "\x00", None):
             with self.subTest(password=invalid), self.assertRaisesRegex(AuthError, "^invalid_password$"):
                 self.auth.bootstrap_master("local_master", "master@example.com", invalid)
         self.master()
         self.assertTrue(self.auth.login("local_master", MASTER_PASSWORD)["session_token"])
         with self.assertRaisesRegex(AuthError, "^invalid_password$"):
-            self.auth.register("member_one", "member@example.com", MASTER_PASSWORD)
-        self.member(verified=False)
+            self.auth.register("member_one", "member@example.com", "x" * 7)
+        self.auth.register("member_one", "member@example.com", MASTER_PASSWORD)
         with self.assertRaisesRegex(AuthError, "^invalid_password$"):
-            self.auth.verify(self.messages[-1][1], MASTER_PASSWORD)
+            self.auth.verify(self.messages[-1][1], "x" * 7)
+        self.assertEqual(self.auth.verify(self.messages[-1][1], MASTER_PASSWORD), {"verified": True})
+        self.assertTrue(self.auth.login("member_one", MASTER_PASSWORD)["session_token"])
         for invalid in ("", "x" * 129, None, "x\x00"):
             with self.subTest(password=invalid), self.assertRaisesRegex(AuthError, "^invalid_credentials$"):
                 self.auth.login("local_master", invalid)

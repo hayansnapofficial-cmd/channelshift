@@ -216,10 +216,10 @@ class MemberAuthTests(unittest.TestCase):
         for email in ("name", "a@b", "a..b@example.com", ".a@example.com", "a@-example.com", "a\r\nb@example.com", []):
             with self.assertRaisesRegex(AuthError, "invalid_email"):
                 normalize_email(email)
-        for password in ("x" * 14, "x" * 129, "x" * 15 + "\x00", "x" * 15 + "\ud800", None):
+        for password in ("x" * 7, "x" * 129, "x" * 8 + "\x00", "x" * 8 + "\ud800", None):
             with self.assertRaisesRegex(AuthError, "invalid_password"):
                 self.auth.register("member_one", "member@example.com", password)
-        unicode_password = "비밀번호는충분히길게설정합니다123"
+        unicode_password = "비밀번호설정12"
         self.auth.register("member_one", "member@example.com", unicode_password)
         self.auth.verify(self.messages[-1][1], unicode_password)
         self.assertTrue(self.auth.login("member_one", unicode_password)["session_token"])

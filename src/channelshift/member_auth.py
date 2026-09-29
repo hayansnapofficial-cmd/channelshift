@@ -65,7 +65,7 @@ def normalize_email(value):
     return value
 
 
-def _password(value, minimum=15):
+def _password(value, minimum=8):
     if type(value) is not str:
         raise AuthError("invalid_password")
     value = unicodedata.normalize("NFC", value)
@@ -249,7 +249,7 @@ class MemberAuth:
         permits login but does not claim that the email address was verified.
         """
         username, email = normalize_username(username), normalize_email(email)
-        encoded = _password(password, minimum=8)
+        encoded = _password(password)
         with self._connect() as db:
             db.execute("BEGIN IMMEDIATE")
             if db.execute("SELECT 1 FROM members WHERE role='master'").fetchone():

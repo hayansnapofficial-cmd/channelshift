@@ -34,7 +34,7 @@
       <form id="register-form">
         <label for="register-username">아이디</label><input id="register-username" name="username" autocomplete="username" autocapitalize="none" spellcheck="false" aria-describedby="username-help" required><p id="username-help" class="field-help">영문·숫자·밑줄(_) 4~32자</p>
         <label for="register-email">이메일</label><input id="register-email" name="email" type="email" autocomplete="email" autocapitalize="none" spellcheck="false" required>
-        <label for="register-password">비밀번호</label><input id="register-password" name="password" type="password" autocomplete="new-password" aria-describedby="password-help" required><p id="password-help" class="field-help">15~128자</p>
+        <label for="register-password">비밀번호</label><input id="register-password" name="password" type="password" autocomplete="new-password" aria-describedby="password-help" required><p id="password-help" class="field-help">8~128자</p>
         <label for="register-password-confirm">비밀번호 확인</label><input id="register-password-confirm" name="password_confirm" type="password" autocomplete="new-password" required>
         <button id="register-submit" class="button primary" type="submit" disabled>인증 메일 요청</button>
       </form>
@@ -50,7 +50,7 @@
       <span class="eyebrow">이메일 인증</span><h1 id="verify-title">내 비밀번호 설정</h1>
       <p class="description">이 계정에서 사용할 비밀번호를 직접 설정해 주세요.</p>
       <form id="verify-form">
-        <label for="verify-password">새 비밀번호</label><input id="verify-password" name="password" type="password" autocomplete="new-password" aria-describedby="verify-password-help" required><p id="verify-password-help" class="field-help">15~128자</p>
+        <label for="verify-password">새 비밀번호</label><input id="verify-password" name="password" type="password" autocomplete="new-password" aria-describedby="verify-password-help" required><p id="verify-password-help" class="field-help">8~128자</p>
         <label for="verify-password-confirm">새 비밀번호 확인</label><input id="verify-password-confirm" name="password_confirm" type="password" autocomplete="new-password" required>
         <button id="verify-submit" class="button primary" type="submit" disabled>인증 완료</button>
       </form>

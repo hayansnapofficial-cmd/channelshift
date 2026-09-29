@@ -7,6 +7,7 @@
   const errors = {
     auth_invalid_input: "아이디·이메일·비밀번호 형식과 길이를 확인해 주세요.",
     invalid_member_input: "아이디·이메일·비밀번호 형식과 길이를 확인해 주세요.",
+    invalid_password: "비밀번호는 8~128자로 입력해 주세요.",
     auth_invalid_credentials: "아이디와 비밀번호 또는 이메일 인증 상태를 확인해 주세요.",
     invalid_credentials: "아이디와 비밀번호 또는 이메일 인증 상태를 확인해 주세요.",
     auth_rate_limited: "요청이 많습니다. 잠시 후 다시 시도해 주세요.",
@@ -85,10 +86,10 @@
     finally { state.pending = false; controls(); }
   }
   function validUsername(value) { return /^[A-Za-z0-9_]{4,32}$/.test(value); }
-  function validPassword(value) { const count = Array.from(value).length; return count >= 15 && count <= 128; }
+  function validPassword(value) { const count = Array.from(value.normalize("NFC")).length; return count >= 8 && count <= 128; }
   function validLoginPassword(value) { const count = Array.from(value).length; return count >= 1 && count <= 128; }
   function checkNewPassword(value, confirm) {
-    if (!validPassword(value)) { message("비밀번호는 15~128자로 입력해 주세요.", true); return false; }
+    if (!validPassword(value)) { message("비밀번호는 8~128자로 입력해 주세요.", true); return false; }
     if (value !== confirm) { message("비밀번호 확인이 일치하지 않습니다.", true); return false; }
     return true;
   }
