@@ -1,4 +1,4 @@
-"""Read-only planning with source-first intake, two lanes and three contracts."""
+"""Source-first planning with two design lanes and required security gates."""
 import unittest
 
 from channelshift.delivery_profile import DEPENDENCIES, INPUTS, STAGES, delivery_plan, standard_site_profile
@@ -34,7 +34,7 @@ class DeliveryProfileTests(unittest.TestCase):
         chain = ['intake', 'environment_check', 'requirements', 'business_review', 'domain_model',
                  'erd', 'database_schema', 'api_contract', 'backend_architecture', 'system_review']
         for previous, current in zip(chain, chain[1:]):
-            self.assertEqual(stages[current]['depends_on'], [previous])
+            self.assertIn(previous, stages[current]['depends_on'])
         self.assertEqual(stages['business_review']['human_decision'], 'business')
         self.assertTrue(stages['system_review']['independent_review'])
         self.assertEqual(stages['system_review']['human_decision'], 'risk_based')
@@ -68,7 +68,7 @@ class DeliveryProfileTests(unittest.TestCase):
         chain = ['contract_review', 'database_build', 'database_review', 'backend_build', 'backend_review',
                  'frontend_build', 'acceptance', 'release_review', 'deployment_approval', 'deployment', 'handover']
         for previous, current in zip(chain, chain[1:]):
-            self.assertEqual(stages[current]['depends_on'], [previous])
+            self.assertIn(previous, stages[current]['depends_on'])
             self.assertEqual(stages[current]['requires_contracts'], ['business', 'system', 'design'])
         self.assertEqual(stages['database_review']['human_decision'], 'risk_based')
         self.assertEqual(stages['deployment_approval']['human_decision'], 'deployment')
@@ -160,6 +160,111 @@ class DeliveryProfileTests(unittest.TestCase):
         for value in (True, 'x'*201, '\ud800'):
             with self.subTest(value_type=type(value).__name__), self.assertRaises(ValueError):
                 delivery_plan(dict(brief, project_name=value))
+
+    def test_security_gates_are_required_ancestors_of_build_acceptance_and_deployment(self):
+        stages = {stage['id']: stage for stage in standard_site_profile()['stages']}
+
+        def ancestors(stage_id):
+            result = set()
+            pending = list(stages[stage_id]['depends_on'])
+            while pending:
+                current = pending.pop()
+                if current not in result:
+                    result.add(current)
+                    pending.extend(stages[current]['depends_on'])
+            return result
+
+        for stage_id in ('database_build', 'backend_build', 'frontend_build'):
+            self.assertTrue({'intake', 'business_review', 'system_review', 'design_review',
+                             'security_requirements', 'threat_model', 'authorization_policy',
+                             'security_design_review'} <= ancestors(stage_id))
+        self.assertIn('database_policy_tests', ancestors('database_review'))
+        self.assertIn('backend_security_tests', ancestors('frontend_build'))
+        self.assertIn('frontend_build', ancestors('security_implementation_review'))
+        self.assertIn('security_implementation_review', ancestors('acceptance'))
+        for stage_id in ('release_review', 'deployment_approval', 'deployment', 'handover'):
+            self.assertTrue({'security_design_review', 'security_implementation_review',
+                             'security_release_review'} <= ancestors(stage_id))
+        self.assertIn('operations_security', ancestors('handover'))
+        # Security must not turn the two design lanes back into a linear flow.
+        self.assertNotIn('design_review', ancestors('erd'))
+        self.assertNotIn('system_review', ancestors('wireframe'))
+
+    def test_security_contract_preserves_three_contracts_and_source_provenance(self):
+        profile = standard_site_profile()
+        security = profile['security_contract']
+        self.assertEqual(set(profile['contracts']), {'business', 'system', 'design'})
+        self.assertEqual(profile['cross_cutting_lanes'], ['security'])
+        self.assertEqual(set(security['covers_contracts']), set(profile['contracts']))
+        self.assertTrue(security['cross_cutting'])
+        self.assertIn('source_digest', security['required_binding'])
+        self.assertIn('authorization_policy_revision', security['required_binding'])
+        self.assertIn('provider_capability_digest', security['required_binding'])
+        self.assertEqual(set(security['requirement_origins']), {'client_source', 'internal_security_baseline'})
+        self.assertIn('exact_quote', security['client_origin_requires'])
+        self.assertIn('baseline_reference', security['internal_origin_requires'])
+        gates = [stage for stage in profile['stages'] if stage.get('gate_id')]
+        self.assertEqual({stage['gate_id'] for stage in gates}, {'SG1', 'SG2', 'SG3'})
+        self.assertTrue(all(stage['independent_review'] and stage['require_current_revision_binding'] for stage in gates))
+
+    def test_plan_never_claims_provider_or_security_execution(self):
+        for brief in (None, {'format': 'channelshift.delivery-brief/v1', 'project_name': 'Synthetic',
+                             'goal': 'Contact site', 'client_request': 'Contact site',
+                             'inputs': {key: 'Synthetic value' for key in INPUTS}}):
+            profile = delivery_plan(brief)['profile']
+            self.assertFalse(profile['security_execution']['runtime_connected'])
+            self.assertFalse(profile['security_contract']['enforcement_connected'])
+            self.assertEqual(profile['security_execution']['checks'], 'not_invoked')
+            self.assertEqual(profile['security_execution']['policy_compilation'], 'not_invoked')
+            self.assertEqual(profile['security_execution']['isolated_database_tests'], 'not_invoked')
+            self.assertTrue(all(stage['execution_status'] == 'not_invoked' for stage in profile['stages']))
+            providers = profile['provider_contracts']
+            self.assertTrue(providers['authorization']['provider_neutral'])
+            self.assertEqual(providers['authorization']['capability_mismatch'], 'HOLD')
+            self.assertEqual(providers['authorization']['unknown_claim_provenance'], 'HOLD')
+            self.assertFalse(providers['authorization']['simulation_is_evidence'])
+            self.assertEqual(providers['database']['status'], 'not_connected')
+            self.assertFalse(providers['database']['capabilities_verified'])
+            self.assertEqual(providers['source']['status'], 'not_connected')
+            self.assertTrue(providers['source']['same_commit_required'])
+            self.assertEqual(providers['source']['unknown_or_missing_check'], 'HOLD')
+            self.assertFalse(providers['source']['webhook_receiver_implemented'])
+
+    def test_new_security_stages_require_source_and_profiles_do_not_share_mutable_state(self):
+        plan = delivery_plan()
+        profile = plan['profile']
+        security_ids = {stage['id'] for stage in profile['stages'] if stage['lane'] == 'security'}
+        self.assertTrue(security_ids <= set(plan['blocked_stages']))
+        self.assertTrue(all(stage['requires_original_source'] for stage in profile['stages']
+                            if stage['id'] in security_ids))
+        profile['security_contract']['required_binding'].clear()
+        profile['provider_contracts']['database']['required_evidence'].clear()
+        profile['security_contract']['gate_ids'].clear()
+        next(stage for stage in profile['stages'] if stage['id'] == 'database_policy_tests')['required_evidence'].clear()
+        fresh = standard_site_profile()
+        self.assertTrue(fresh['security_contract']['required_binding'])
+        self.assertTrue(fresh['provider_contracts']['database']['required_evidence'])
+        self.assertEqual(len(fresh['security_contract']['gate_ids']), 3)
+        self.assertIn('admin_and_bypass_roles', next(stage for stage in fresh['stages']
+                                                    if stage['id'] == 'database_policy_tests')['required_evidence'])
+
+    def test_delivery_requires_domain_seo_and_handover_evidence_without_claiming_completion(self):
+        stages = {stage['id']: stage for stage in standard_site_profile()['stages']}
+        expected = {
+            'acceptance': {'SEO_RENDERED_HTML', 'SEO_URL_SAFETY', 'SEO_OG_IMAGE_FETCH',
+                           'SEO_SITEMAP_ROBOTS', 'SEO_REDIRECT_404', 'SEO_STRUCTURED_DATA'},
+            'deployment': {'DNS_ZONE_SNAPSHOT', 'DNS_PLAN_DIFF', 'DNS_APPROVAL', 'DNS_READBACK',
+                           'DNS_MAIL_PRESERVED', 'DOMAIN_TLS_HTTPS', 'DOMAIN_REDIRECT_HEALTH'},
+            'handover': {'SEO_SEARCH_CONSOLE_READY', 'DELIVERY_OWNERSHIP', 'DELIVERY_BACKUP_RESTORE',
+                         'DELIVERY_SECRET_HANDOFF', 'DELIVERY_TEMP_ACCESS_REVOKED',
+                         'DELIVERY_CUSTOMER_ACCEPTANCE'},
+        }
+        for stage_id, evidence in expected.items():
+            self.assertEqual(set(stages[stage_id]['required_evidence']), evidence)
+            self.assertEqual(stages[stage_id]['evidence_status'], 'not_invoked')
+            self.assertEqual(stages[stage_id]['applicability_requires'], 'recorded_contract_decision')
+            self.assertIn('docs/INFRASTRUCTURE_DELIVERY.md', stages[stage_id]['evidence_contracts'])
+            self.assertNotIn('approved', stages[stage_id])
 
 
 if __name__ == '__main__':

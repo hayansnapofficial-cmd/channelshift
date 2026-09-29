@@ -243,6 +243,78 @@ class DeliveryHTTPTests(unittest.TestCase):
         self.assertEqual(status, 200)
         self.assertEqual(json.loads(raw)['project']['interventions'][-1]['note'], body['note'])
 
+    def test_answer_endpoint_preserves_history_rejects_stale_and_requires_exact_scope(self):
+        project = self.create()
+        self.request('/api/delivery/extract', 'POST', {'project_id': project['id']})
+        viewed = self.finished(project['id'])
+        question = viewed['question_answers'][0]
+        body = {'project_id': project['id'], 'candidate_revision': viewed['candidate_revision'],
+                'question_id': question['question_id'], 'question_digest': question['question_digest'],
+                'answer': '30일', 'expected_revision': question['answer_revision']}
+        for headers in ({'Origin': 'https://foreign.example'}, {'X-ChannelShift-Token': None}):
+            self.assertEqual(self.request('/api/delivery/answer', 'POST', body, headers)[0], 403)
+        for extra in ({'approved': True}, {'source': '원문 덮어쓰기'}):
+            self.assertEqual(self.request('/api/delivery/answer', 'POST', {**body, **extra})[0], 404)
+        self.assertEqual(self.workspace.get(project['id']), viewed)
+        status, _, raw = self.request('/api/delivery/answer', 'POST', body)
+        self.assertEqual(status, 200)
+        saved = json.loads(raw)['project']
+        self.assertEqual(saved['question_answers'][0]['answer'], '30일')
+        self.assertEqual(saved['answer_summary']['blocking_unanswered'], 0)
+        status, _, raw = self.request('/api/delivery/answer', 'POST', {**body, 'answer': '다른 탭의 미저장 답변'})
+        self.assertEqual(status, 409)
+        self.assertEqual(json.loads(raw), {'ok': False, 'error': 'delivery_revision_conflict'})
+        self.assertEqual(self.workspace.get(project['id']), saved)
+        self.assertEqual(self.extract.call_count, 1)
+        self.review.assert_not_called()
+        self.workspace._jobs.submit(lambda: None).result(timeout=5)
+        self.request('/api/delivery/extract', 'POST', {'project_id': project['id']})
+        updated = self.finished(project['id'])
+        self.assertIn('30일', self.extract.call_args.args[0])
+        self.assertEqual(updated['question_answers'][0]['answer'], '')
+        self.assertEqual(updated['answer_history'][0]['answer'], '30일')
+        self.assertEqual(self.request('/api/delivery/answer', 'POST',
+                                     {**body, 'expected_revision': saved['question_answers'][0]['answer_revision']})[0], 409)
+
+    def test_combined_input_overflow_is_clear_and_does_not_start_a_provider(self):
+        project = self.workspace.create('한도 테스트', '가' * 12000)
+        self.workspace.start(project['id'], 'extract')
+        self.workspace._jobs.submit(lambda: None).result(timeout=5)
+        viewed = self.workspace.get(project['id'])
+        question = viewed['question_answers'][0]
+        self.workspace.answer(project['id'], viewed['candidate_revision'], question['question_id'],
+                              question['question_digest'], '30일', question['answer_revision'])
+        before = self.workspace.get(project['id'])
+        status, _, raw = self.request('/api/delivery/extract', 'POST', {'project_id': project['id']})
+        self.assertEqual(status, 400)
+        self.assertEqual(json.loads(raw), {'ok': False, 'error': 'delivery_input_limit'})
+        self.assertEqual(self.workspace.get(project['id']), before)
+        self.assertEqual(self.extract.call_count, 1)
+
+    def test_consent_policy_route_requires_actor_reason_scope_and_rejects_stale_with_409(self):
+        project = self.create()
+        body = {'project_id': project['id'], 'mode': 'not_required', 'operator_label': '합성 담당자',
+                'reason': '선택 기능 미사용 검토', 'expected_revision': project['consent_revision']}
+        for headers in ({'Origin': 'https://foreign.example'}, {'X-ChannelShift-Token': None}):
+            self.assertEqual(self.request('/api/delivery/consent', 'POST', body, headers)[0], 403)
+        self.assertEqual(self.request('/api/delivery/consent', 'POST', {**body, 'approved': True})[0], 404)
+        for fields in ({'operator_label': ''}, {'reason': ''}, {'mode': 'legal_pass'}):
+            self.assertEqual(self.request('/api/delivery/consent', 'POST', {**body, **fields})[0], 400)
+        self.assertEqual(self.workspace.get(project['id']), project)
+        status, _, raw = self.request('/api/delivery/consent', 'POST', body)
+        self.assertEqual(status, 200)
+        saved = json.loads(raw)['project']
+        self.assertEqual(saved['consent_policy']['mode'], 'not_required')
+        self.assertEqual(saved['consent_history'][0]['reason'], body['reason'])
+        self.assertFalse(saved['consent_policy']['approval_granted'])
+        self.assertFalse(saved['consent_policy']['tracking_enabled'])
+        status, _, raw = self.request('/api/delivery/consent', 'POST', {**body, 'mode': 'required'})
+        self.assertEqual(status, 409)
+        self.assertEqual(json.loads(raw)['error'], 'delivery_revision_conflict')
+        self.assertEqual(self.workspace.get(project['id']), saved)
+        self.extract.assert_not_called()
+        self.review.assert_not_called()
+
     def test_status_get_returns_metadata_only_and_never_calls_paid_providers(self):
         safe = {'available': True, 'authenticated': True, 'auth_mode': 'chatgpt',
                 'can_execute': True, 'cli_version': 'test', 'reason': 'ready'}

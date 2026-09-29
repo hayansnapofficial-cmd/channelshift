@@ -31,7 +31,7 @@ def error_code(error):
                "java_json_mapping_unsupported", "java_name_collision", "invalid_format",
                "invalid_delivery_input", "invalid_delivery_project", "delivery_project_not_found",
                "delivery_storage_limit", "delivery_busy", "delivery_recovery_required", "delivery_candidate_required",
-               "delivery_revision_conflict",
+               "delivery_revision_conflict", "delivery_input_limit",
                "invalid_impact_graph", "invalid_impact_field", "impact_graph_too_complex"}
     return str(error) if type(error) is ValueError and str(error) in allowed else "operation_failed"
 
@@ -158,6 +158,10 @@ def handler_factory(store=None, token=None, delivery=None):
                     value = {"ok": True, "project": intake_workspace().start(data['project_id'], operation)}
                 elif self.path == "/api/delivery/intervention" and set(data) == {"project_id", "stage_id", "reason", "note", "decision", "outcome", "expected_revision"}:
                     value = {"ok": True, "project": intake_workspace().intervene(**data)}
+                elif self.path == "/api/delivery/answer" and set(data) == {"project_id", "candidate_revision", "question_id", "question_digest", "answer", "expected_revision"}:
+                    value = {"ok": True, "project": intake_workspace().answer(**data)}
+                elif self.path == "/api/delivery/consent" and set(data) == {"project_id", "mode", "operator_label", "reason", "expected_revision"}:
+                    value = {"ok": True, "project": intake_workspace().consent(**data)}
                 elif self.path == "/api/generate" and set(data) <= {"templateId", "project", "database"}:
                     value = {"ok": True, "schema": create_schema(data["templateId"], data["project"], data.get("database", "postgresql"))}
                 elif self.path == "/api/validate" and set(data) == {"schema"}:

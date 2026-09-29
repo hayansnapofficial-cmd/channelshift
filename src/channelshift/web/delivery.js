@@ -2,22 +2,26 @@
 
 (() => {
   const $ = (id) => document.getElementById(id);
-  const state = { status: null, project: null, projects: [], pending: false, timer: null, sequence: 0, interventionRevision: null };
+  const state = { status: null, project: null, projects: [], pending: false, timer: null, sequence: 0, interventionRevision: null, answerDrafts: new Map(), consentDrafts: new Map() };
+  const consentModes = { undecided: "미결정", required: "사용", not_required: "사용 안함" };
   const labels = { RECEIVED: "접수됨", EXTRACTING: "Codex 정리 중", RUNNING: "작업 중", REVIEW_REQUIRED: "검토 필요", REVIEWING: "Jev 검토 중", NEEDS_ATTENTION: "문제 확인 필요" };
   const reasons = { missing_client_info: "고객 정보 부족", contradictory_requirements: "요구사항 모순", model_error: "모델 오류", nonstandard_request: "표준 밖 요청", access_approval: "권한·승인 확인", quality_issue: "품질 문제", other: "기타" };
   const errors = {
+    member_provider_not_linked: "회원 본인의 Codex 연결이 필요합니다. 회원용 연결 기능은 준비 중입니다.",
+    login_required: "로그인이 만료되었습니다. 입력 내용을 보관한 뒤 내 계정에서 다시 로그인하세요.",
     invalid_token: "연결 확인이 만료되었습니다. 입력 내용을 따로 보관한 뒤 페이지를 새로고침하세요.",
     invalid_origin: "연결 주소를 확인할 수 없습니다. 로컬 ChannelShift 주소에서 다시 열어 주세요.",
     invalid_request: "입력 항목을 확인하고 다시 시도해 주세요.",
     invalid_project: "프로젝트 이름과 고객 원문을 확인해 주세요.",
     invalid_delivery_project: "프로젝트 이름과 고객 원문을 확인해 주세요.",
-    invalid_delivery_input: "필수 입력과 길이를 확인하세요. 원문은 12,000자, 개입 기록의 각 항목은 2,000자까지 저장할 수 있습니다.",
+    invalid_delivery_input: "필수 입력과 길이를 확인하세요. 원문은 12,000자, 답변과 개입 기록의 각 항목은 2,000자까지 저장할 수 있습니다.",
     delivery_project_not_found: "프로젝트를 찾지 못했습니다. 목록을 새로고침하세요.",
     delivery_storage_limit: "로컬 기록 저장 한도에 도달했습니다. 담당자에게 보관 정책 확인을 요청하세요.",
     delivery_busy: "다른 작업이 진행 중입니다. 작업 결과를 기다린 뒤 다시 시도하세요.",
     delivery_recovery_required: "이전 작업의 종료 확인이 필요합니다. 중복 실행하지 말고 담당자에게 실행 상태 점검을 요청하세요.",
     delivery_candidate_required: "내 Codex로 요구사항을 먼저 정리한 뒤 Jev 검토를 요청하세요.",
     delivery_revision_conflict: "검토 대상이 변경되었습니다. 메모는 보존했습니다. 최신 결과를 확인한 뒤 다시 저장하세요.",
+    delivery_input_limit: "원문과 저장된 답변을 합친 정리 입력이 12,000자를 넘습니다. 답변 길이나 접수 범위를 조정해 주세요. 내용은 잘리지 않았습니다.",
     delivery_job_failed: "작업을 마치지 못했습니다. 담당자에게 연결과 작업 이력 확인을 요청하세요.",
     invalid_intervention: "개입 단계·이유·상황 내용을 확인해 주세요.",
     invalid_source: "고객 요구사항 원문을 입력해 주세요.",
@@ -72,7 +76,12 @@
     $("extract").disabled = busy || !state.project || state.status?.codex?.can_execute !== true;
     $("review-jev").disabled = busy || !state.project?.candidate || state.status?.jev_configured !== true;
     $("save-intervention").disabled = state.pending || !state.project;
+    $("save-consent").disabled = state.pending || !state.project;
+    $("consent-rebase").disabled = state.pending;
+    ["consent-mode", "consent-operator", "consent-reason"].forEach((id) => { $(id).disabled = state.pending; });
     $("new-project").disabled = state.pending;
+    document.querySelectorAll(".answer-save, .answer-rebase").forEach((button) => { button.disabled = busy; });
+    document.querySelectorAll(".answer-form textarea").forEach((input) => { input.disabled = busy; });
     $("extract").textContent = state.project?.state === "EXTRACTING" ? "정리 중…" : "Codex로 정리";
     $("review-jev").textContent = state.project?.state === "REVIEWING" ? "검토 중…" : "Jev 검토";
   }
@@ -122,9 +131,75 @@
     const target = $("jev-results"); target.replaceChildren();
     if (!project.jev) return;
     target.append(node("p", "muted small", project.jev.status === "completed" || project.jev.status === "COMPLETE" ? "Jev 대조 결과" : "Jev 검토 기록"));
-    const judgments = { supported: "원문에서 근거를 찾음", unsupported: "원문 근거를 찾지 못함", contradicted: "원문과 모순될 수 있음", unclear: "추가 확인 필요" };
+    const judgments = { supported: "입력 근거에서 확인됨", unsupported: "입력 근거를 찾지 못함", contradicted: "입력 근거와 모순될 수 있음", unclear: "추가 확인 필요" };
     list(project.jev.items).forEach((item) => { const row = node("article", "result-item"); row.append(node("strong", null, text(item.requirement_id) || "요구사항 확인"), node("p", null, judgments[item.judgment] || "판정 내용 확인 필요")); if (typeof item.confidence === "number" && Number.isFinite(item.confidence)) row.append(node("p", "muted small", `신뢰도 ${item.confidence}`)); target.append(row); });
     if (!list(project.jev.items).length) target.append(node("p", "empty-result", "결과 없음"));
+  }
+  function renderQuestions(project) {
+    const target = $("questions"); target.replaceChildren();
+    const summary = project.answer_summary || {};
+    $("answer-summary").textContent = `답변 ${summary.answered || 0}/${summary.total || 0} · 필수 미답변 ${summary.blocking_unanswered || 0}`;
+    const questions = list(project.candidate?.questions);
+    if (!questions.length) target.append(node("p", "empty-result", "없음"));
+    questions.forEach((question, index) => {
+      const saved = list(project.question_answers).find((item) => item.question_id === question.id);
+      if (!saved) return;
+      const key = `${project.id}:${project.candidate_revision}:${saved.question_digest}`;
+      const draft = state.answerDrafts.get(key);
+      const conflict = Boolean(draft && draft.expectedRevision !== saved.answer_revision);
+      const row = node("article", "result-item answer-item");
+      row.append(node("strong", null, `${question.id} · ${saved.answered ? "답변 저장됨" : question.blocking ? "필수 · 미답변" : "미답변"}`), node("p", null, text(question.text)));
+      const form = node("form", "answer-form");
+      const input = node("textarea"); input.id = `question-answer-${index}`; input.rows = 3;
+      input.value = draft ? draft.answer : saved.answer; input.dataset.questionId = question.id;
+      const label = node("label", null, "답변"); label.htmlFor = input.id;
+      const length = node("small", "muted", `${Array.from(input.value).length}/2,000자`);
+      input.addEventListener("input", () => {
+        const prior = state.answerDrafts.get(key);
+        state.answerDrafts.set(key, { projectId: project.id, candidateRevision: project.candidate_revision,
+          questionText: question.text, questionId: question.id, answer: input.value,
+          expectedRevision: prior?.expectedRevision || saved.answer_revision });
+        length.textContent = `${Array.from(input.value).length}/2,000자 · 미저장`;
+      });
+      const save = node("button", "button secondary answer-save", saved.answered ? "답변 수정 저장" : "답변 저장"); save.type = "submit";
+      form.append(label, input, length);
+      if (conflict) {
+        form.append(node("p", "answer-conflict", "다른 탭에서 답변이 변경되었습니다. 입력한 답변은 보존했습니다."),
+          node("p", "saved-answer", `현재 저장된 답변: ${saved.answer || "(비어 있음)"}`));
+        const rebase = node("button", "text-button answer-rebase", "현재 답변 확인함"); rebase.type = "button";
+        rebase.addEventListener("click", () => { state.answerDrafts.get(key).expectedRevision = saved.answer_revision; renderQuestions(state.project); controls(); });
+        form.append(rebase);
+      }
+      form.append(save);
+      form.addEventListener("submit", async (event) => {
+        event.preventDefault();
+        if (state.pending || running(state.project)) return;
+        if (Array.from(input.value).length > 2000) { message("답변은 2,000자까지 저장할 수 있습니다. 내용을 줄여 주세요.", true); return; }
+        const currentDraft = state.answerDrafts.get(key);
+        if (currentDraft && currentDraft.expectedRevision !== saved.answer_revision) { message("현재 저장된 답변을 확인한 뒤 다시 저장하세요. 입력한 답변은 보존했습니다.", true); return; }
+        await mutation("/api/delivery/answer", { project_id: project.id, candidate_revision: project.candidate_revision,
+          question_id: question.id, question_digest: saved.question_digest, answer: input.value,
+          expected_revision: currentDraft?.expectedRevision || saved.answer_revision }, "답변 저장됨 · 다시 정리할 때 반영",
+          () => state.answerDrafts.delete(key));
+      });
+      row.append(form); target.append(row);
+    });
+    const history = $("answer-history"); history.replaceChildren();
+    list(project.answer_history).slice().reverse().forEach((answer) => {
+      const row = node("article", "history-item");
+      row.append(node("strong", null, `${answer.question_id} · ${answer.candidate_revision === project.candidate_revision ? "현재 후보" : "이전 후보"}`),
+        node("small", null, date(answer.created_at)), node("p", null, answer.question_text), node("p", null, answer.answer || "답변 비움"));
+      history.append(row);
+    });
+    for (const draft of state.answerDrafts.values()) {
+      if (draft.projectId === project.id && draft.candidateRevision !== project.candidate_revision) {
+        const row = node("article", "history-item answer-conflict");
+        row.append(node("strong", null, `${draft.questionId} · 이전 후보의 미저장 답변`), node("p", null, draft.questionText));
+        const preserved = node("textarea"); preserved.readOnly = true; preserved.value = draft.answer;
+        preserved.setAttribute("aria-label", `${draft.questionId} 이전 후보의 미저장 답변`); row.append(preserved); history.append(row);
+      }
+    }
+    if (!history.children.length) history.append(node("p", "empty-result", "기록 없음"));
   }
   function renderHistory(project) {
     const target = $("interventions"); target.replaceChildren();
@@ -137,11 +212,30 @@
     const events = $("events"); events.replaceChildren();
     list(project.events).slice().reverse().forEach((item) => {
       const row = node("article", "history-item"); const kind = text(item.type) || text(item.event) || text(item.kind);
-      const eventNames = { source_registered: "고객 원문 접수", job_started: item.payload?.operation === "jev" ? "Jev 검토 시작" : "Codex 정리 시작", candidate_recorded: "요구사항 초안 저장", advice_recorded: "Jev 대조 의견 저장", job_failed: "작업 실패 · 확인 필요", human_intervention: "사람 개입 기록" };
+      const eventNames = { source_registered: "고객 원문 접수", job_started: item.payload?.operation === "jev" ? "Jev 검토 시작" : "Codex 정리 시작", candidate_recorded: "요구사항 초안 저장", advice_recorded: "Jev 대조 의견 저장", job_failed: "작업 실패 · 확인 필요", human_intervention: "사람 개입 기록", question_answered: "질문 답변 저장", consent_policy_recorded: "동의 화면 설정 저장" };
       row.append(node("p", null, eventNames[kind] || "작업 상태 기록"), node("small", null, date(item.created_at || item.at)));
       const code = item.payload?.code || item.error; if (code) row.append(node("p", null, safeError(code))); events.append(row);
     });
     if (!list(project.events).length) events.append(node("p", "empty-result", "기록 없음"));
+  }
+  function renderConsent(project) {
+    const saved = project.consent_policy || { mode: "undecided", operator_label: "", reason: "" };
+    const draft = state.consentDrafts.get(project.id);
+    const form = draft || saved;
+    $("consent-current").textContent = consentModes[saved.mode] || "미결정";
+    $("consent-mode").value = form.mode;
+    $("consent-operator").value = form.operator_label;
+    $("consent-reason").value = form.reason;
+    $("consent-conflict").hidden = !draft || draft.expectedRevision === project.consent_revision;
+    $("consent-latest").textContent = `${consentModes[saved.mode]} · ${saved.operator_label || "선택자 없음"}\n${saved.reason}`;
+    const history = $("consent-history"); history.replaceChildren();
+    list(project.consent_history).slice().reverse().forEach((item) => {
+      const row = node("article", "history-item");
+      row.append(node("strong", null, `${consentModes[item.mode]} · ${item.operator_label}`),
+        node("small", null, date(item.created_at)), node("p", null, item.reason));
+      history.append(row);
+    });
+    if (!history.children.length) history.append(node("p", "empty-result", "기록 없음"));
   }
   function renderProject() {
     const project = state.project; $("intake-panel").hidden = Boolean(project); $("project-panel").hidden = !project; renderList(); controls();
@@ -149,8 +243,10 @@
     $("selected-name").textContent = text(project.name); $("project-state").textContent = labels[project.state] || "상태 확인 필요";
     $("source-text").textContent = text(project.source?.text);
     $("candidate-panel").hidden = !project.candidate;
-    if (project.candidate) { const requirements = list(project.candidate.requirements); const fromClient = (item) => ["client", "customer", "client_original"].includes(item.origin); resultList("client-requirements", requirements.filter(fromClient), "client"); resultList("internal-requirements", requirements.filter((item) => !fromClient(item)), "internal"); resultList("questions", list(project.candidate.questions), "question"); resultList("out-of-scope", list(project.candidate.out_of_scope), "scope"); renderJev(project); }
+    if (project.candidate) { const requirements = list(project.candidate.requirements); const fromClient = (item) => ["client", "customer", "client_original"].includes(item.origin); resultList("client-requirements", requirements.filter(fromClient), "client"); resultList("internal-requirements", requirements.filter((item) => !fromClient(item)), "internal"); renderQuestions(project); resultList("out-of-scope", list(project.candidate.out_of_scope), "scope"); renderJev(project); }
     renderHistory(project);
+    renderConsent(project);
+    controls();
   }
   function schedulePoll() {
     clearTimeout(state.timer); if (!running(state.project)) return;
@@ -158,18 +254,51 @@
     state.timer = setTimeout(async () => { try { const result = await api(`/api/delivery/projects/${encodeURIComponent(id)}`); if (sequence !== state.sequence || state.project?.id !== id) return; state.project = result.project; renderProject(); if (!running(state.project)) { message(labels[state.project.state] || "상태 변경됨"); await refreshProjects(); } schedulePoll(); } catch (error) { if (sequence === state.sequence) message(error.message, true); } }, 2500);
   }
   async function openProject(id) {
+    if (state.pending) return; state.pending = true; controls();
     clearTimeout(state.timer); const sequence = ++state.sequence; message("");
     try { const result = await api(`/api/delivery/projects/${encodeURIComponent(id)}`); if (sequence !== state.sequence) return; state.project = result.project; state.interventionRevision = null; $("intervention-form").reset(); renderProject(); schedulePoll(); } catch (error) { if (sequence === state.sequence) message(error.message, true); }
-  }
-  async function mutation(path, body, success) {
-    if (state.pending) return false; state.pending = true; controls(); message("");
-    try { const result = await api(path, body); if (!result.project || typeof result.project.id !== "string") throw new Error("프로젝트 응답을 읽지 못했습니다. 목록을 새로고침해 저장 여부를 확인하세요."); state.project = result.project; ++state.sequence; renderProject(); schedulePoll(); message(success); await refreshProjects(); return true; }
-    catch (error) { message(error.message, true); if (error.status === 409 && state.project) { const id = state.project.id; try { const result = await api(`/api/delivery/projects/${encodeURIComponent(id)}`); state.project = result.project; if (error.code === "delivery_revision_conflict") state.interventionRevision = state.project.intervention_revision; renderProject(); schedulePoll(); } catch {} } return false; }
     finally { state.pending = false; controls(); }
   }
-  $("intake-form").addEventListener("submit", async (event) => { event.preventDefault(); const name = $("project-name").value.trim(); const request = $("client-request").value; if (!name || !request.trim()) { message("프로젝트명과 원문을 입력하세요.", true); return; } if (await mutation("/api/delivery/projects", { name, client_request: request }, "원문 저장됨")) $("intake-form").reset(); });
+  async function mutation(path, body, success, onSuccess = null) {
+    if (state.pending) return false; state.pending = true; controls(); message("");
+    try { const result = await api(path, body); if (!result.project || typeof result.project.id !== "string") throw new Error("프로젝트 응답을 읽지 못했습니다. 목록을 새로고침해 저장 여부를 확인하세요."); state.project = result.project; if (onSuccess) onSuccess(); ++state.sequence; renderProject(); schedulePoll(); message(success); await refreshProjects(); return true; }
+    catch (error) {
+      let detail = error.message;
+      if (error.status === 409 && path === "/api/delivery/answer") detail = "질문이나 저장된 답변이 변경되었습니다. 작성 중인 답변은 보존했습니다. 최신 내용을 확인해 주세요.";
+      if (error.status === 409 && path === "/api/delivery/consent") detail = "저장된 설정이 변경되었습니다. 작성 중인 내용은 보존했습니다. 최신 설정을 확인해 주세요.";
+      message(detail, true);
+      if (error.status === 409 && state.project) { const id = state.project.id; try { const result = await api(`/api/delivery/projects/${encodeURIComponent(id)}`); state.project = result.project; if (path === "/api/delivery/intervention" && error.code === "delivery_revision_conflict") state.interventionRevision = state.project.intervention_revision; renderProject(); schedulePoll(); } catch {} }
+      return false;
+    }
+    finally { state.pending = false; controls(); }
+  }
+  $("intake-form").addEventListener("submit", async (event) => { event.preventDefault(); const name = $("project-name").value.trim(); const request = $("client-request").value; if (!name || !request.trim()) { message("프로젝트명과 원문을 입력하세요.", true); return; } if (Array.from(request).length > 12000) { message("원문은 12,000자까지 저장할 수 있습니다. 내용을 줄여 주세요.", true); return; } if (await mutation("/api/delivery/projects", { name, client_request: request }, "원문 저장됨")) $("intake-form").reset(); });
   $("extract").addEventListener("click", () => { if (state.project && !$("extract").disabled) mutation("/api/delivery/extract", { project_id: state.project.id }, "Codex 정리 요청됨"); });
   $("review-jev").addEventListener("click", () => { if (state.project && !$("review-jev").disabled) mutation("/api/delivery/jev", { project_id: state.project.id }, "Jev 검토 요청됨"); });
+  function rememberConsentDraft() {
+    if (!state.project) return;
+    const prior = state.consentDrafts.get(state.project.id);
+    state.consentDrafts.set(state.project.id, { mode: $("consent-mode").value, operator_label: $("consent-operator").value,
+      reason: $("consent-reason").value, expectedRevision: prior?.expectedRevision || state.project.consent_revision });
+  }
+  $("consent-form").addEventListener("input", rememberConsentDraft);
+  $("consent-form").addEventListener("change", rememberConsentDraft);
+  $("consent-rebase").addEventListener("click", () => {
+    if (!state.project || state.pending) return;
+    const draft = state.consentDrafts.get(state.project.id);
+    if (draft) draft.expectedRevision = state.project.consent_revision;
+    renderConsent(state.project);
+  });
+  $("consent-form").addEventListener("submit", async (event) => {
+    event.preventDefault(); if (!state.project || state.pending) return;
+    rememberConsentDraft(); const id = state.project.id; const draft = state.consentDrafts.get(id);
+    if (!draft.operator_label.trim() || !draft.reason.trim() || Array.from(draft.operator_label).length > 100 || Array.from(draft.reason).length > 2000) {
+      message("선택자 표기(100자 이내)와 선택 이유(2,000자 이내)를 입력하세요.", true); return;
+    }
+    if (draft.expectedRevision !== state.project.consent_revision) { message("현재 저장된 설정을 확인한 뒤 다시 저장하세요. 입력 내용은 보존했습니다.", true); return; }
+    await mutation("/api/delivery/consent", { project_id: id, mode: draft.mode, operator_label: draft.operator_label,
+      reason: draft.reason, expected_revision: draft.expectedRevision }, "동의 화면 설정 저장됨", () => state.consentDrafts.delete(id));
+  });
   $("intervention-form").addEventListener("input", () => { if (!state.interventionRevision) state.interventionRevision = state.project?.intervention_revision || null; });
   $("intervention-form").addEventListener("submit", async (event) => { event.preventDefault(); if (!state.project) return; const note = $("intervention-note").value.trim(); if (!note) { message("상황과 확인 내용을 입력하세요.", true); return; } const body = { project_id: state.project.id, expected_revision: state.interventionRevision || state.project.intervention_revision, stage_id: $("stage-id").value, reason: $("intervention-reason").value, note, decision: $("intervention-decision").value.trim(), outcome: $("intervention-outcome").value.trim() }; if (await mutation("/api/delivery/intervention", body, "개입 기록 저장됨")) { state.interventionRevision = null; $("intervention-form").reset(); } });
   $("new-project").addEventListener("click", () => { if (state.pending) return; clearTimeout(state.timer); ++state.sequence; state.project = null; state.interventionRevision = null; $("intervention-form").reset(); message(""); renderProject(); $("client-request").focus(); });
