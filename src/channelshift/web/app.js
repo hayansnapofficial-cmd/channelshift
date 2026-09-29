@@ -24,6 +24,7 @@
     storage_quota_exceeded: "설계 저장 한도에 도달했습니다. 편집 내용을 JSON으로 내려받고 관리자에게 문의하세요.",
     delivery_erd_required: "이 프로젝트의 ERD 초안이 없습니다. 요구사항 검수에서 초안을 만들어 주세요.",
     delivery_erd_stale: "요구사항이 변경되어 이 초안을 저장할 수 없습니다. 편집 내용은 유지했습니다. JSON으로 보관한 뒤 요구사항을 확인하세요.",
+    delivery_erd_note_required: "수정한 내용과 이유를 1,000자 이내로 적어 주세요.",
     delivery_revision_conflict: "다른 창에서 ERD 초안이 변경되었습니다. 편집 내용은 유지했습니다. JSON으로 보관한 뒤 최신 초안을 다시 여세요.",
     delivery_project_not_found: "연결된 요구사항 프로젝트를 찾지 못했습니다. 요구사항 목록을 확인하세요.",
     delivery_busy: "프로젝트 작업이 진행 중입니다. 편집 내용은 유지했습니다. 작업이 끝난 뒤 다시 저장하세요.",
@@ -188,6 +189,9 @@
     $("delivery-link-title").textContent = source ? `${source.name || "프로젝트"} · 요구사항 연결` : "";
     $("delivery-back-link").href = source ? `/delivery?project=${encodeURIComponent(source.projectId)}` : "/delivery";
     $("delivery-link-help").textContent = state.deliveryBlocked ? state.deliveryBlocked.message : state.deliveryConflict ? "서버 초안이나 요구사항이 변경되었습니다. 현재 편집은 보존했습니다. JSON으로 보관한 뒤 요구사항에서 최신 초안을 확인하세요." : state.delivery?.traceabilityCurrent === false ? "수동 편집한 구조입니다. 요구사항과 테이블·필드 연결 근거를 다시 확인하세요. 저장해도 실제 DB를 실행하거나 설계를 승인하지 않습니다." : "이 편집은 해당 요구사항의 ERD 초안에 저장됩니다. 테이블·필드를 바꾸면 요구사항과의 연결 근거를 다시 확인하세요.";
+    $("delivery-edit-reason").hidden = !state.delivery;
+    $("delivery-edit-note").disabled = state.busy || !state.delivery;
+    $("delivery-edit-note").required = Boolean(state.delivery && JSON.stringify(state.schema) !== state.delivery.savedSchema);
     document.querySelectorAll('a[href^="/delivery"]').forEach((link) => { if (link.id !== "delivery-back-link") link.href = source ? `/delivery?project=${encodeURIComponent(source.projectId)}` : "/delivery"; });
   }
   function setDeliveryUrl(projectId) {
@@ -199,6 +203,8 @@
     state.impactPending = false;
     state.schema = schema;
     state.delivery = delivery; state.deliveryBlocked = null; state.deliveryConflict = false;
+    if (delivery) delivery.savedSchema = JSON.stringify(schema);
+    $("delivery-edit-note").value = "";
     setDeliveryUrl(delivery?.projectId || null);
     state.savedId = savedId;
     state.topic = topic;
@@ -227,9 +233,28 @@
         updateButtons(); return;
       }
       applySchema(schema, { delivery: { projectId, name: project.name, revision: draft.revision, traceabilityCurrent: draft.traceability_current === true } });
+      void loadDeliveryTraceability(projectId);
       notify("요구사항에 연결된 저장 초안을 불러왔습니다.");
     } catch (error) {
       state.deliveryBlocked = { projectId, name: "프로젝트", message: error.message }; updateButtons(); throw error;
+    }
+  }
+
+  async function loadDeliveryTraceability(projectId) {
+    const delivery = state.delivery, revision = state.revision, graphRevision = impact.getRevision();
+    const current = () => state.delivery === delivery && delivery?.projectId === projectId && state.revision === revision;
+    const labels = {
+      current: "생성 산출물의 연결 선언 · 실행 검증 전",
+      contract_incomplete: "API·백엔드·화면 연결 정보가 아직 완성되지 않았습니다.",
+      erd_not_current: "현재 ERD에 연결된 산출물을 다시 확인해야 합니다.",
+      traceability_limit: "연결 정보가 표시 한도를 초과했습니다.",
+    };
+    try {
+      const result = await api(`/api/studio/projects/${encodeURIComponent(projectId)}/traceability`);
+      if (!current()) return;
+      impact.setGraph(result.graph ?? null, labels[result.reason] || "연결 정보 미확인", { expectedRevision: graphRevision });
+    } catch {
+      if (current()) impact.setGraph(null, "연결 정보를 불러오지 못했습니다. JSON으로 연결할 수 있습니다.", { expectedRevision: graphRevision });
     }
   }
 
@@ -672,15 +697,22 @@
   $("validate").addEventListener("click", () => run(() => validateCurrent()));
   $("save-project").addEventListener("click", () => run(async () => {
     if (state.deliveryBlocked) return;
+    const note = $("delivery-edit-note").value;
+    if (state.delivery && JSON.stringify(state.schema) !== state.delivery.savedSchema && !note.trim()) {
+      notify(errors.delivery_erd_note_required, true);
+      setTimeout(() => $("delivery-edit-note").focus(), 0);
+      return;
+    }
     if (!await validateCurrent(false)) { notify("저장하기 전에 검증 결과를 확인해 주세요.", true); return; }
     const revision = state.revision;
     if (state.delivery) {
       try {
-        const result = await api("/api/delivery/erd/save", { project_id: state.delivery.projectId, schema: snapshot(), expected_revision: state.delivery.revision });
+        const result = await api("/api/delivery/erd/save", { project_id: state.delivery.projectId, schema: snapshot(), expected_revision: state.delivery.revision, note });
         const draft = result.project?.erd_draft;
         if (typeof draft?.revision !== "string") throw new Error("저장 응답을 확인하지 못했습니다. 편집 내용은 유지했습니다. 요구사항에서 저장 여부를 확인하세요.");
         if (state.revision === revision) {
           state.dirty = false; state.delivery.revision = draft.revision; state.delivery.traceabilityCurrent = draft.traceability_current === true; state.deliveryConflict = false; impact.schemaChanged();
+          state.delivery.savedSchema = JSON.stringify(state.schema); $("delivery-edit-note").value = "";
         }
         notify("요구사항에 연결된 ERD 초안을 저장했습니다. 연결 근거를 다시 확인하세요.");
       } catch (error) {

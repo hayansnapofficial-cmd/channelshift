@@ -95,7 +95,7 @@ function renderAdditionalRequest(){
 }
 function renderHistory(){
   $("history-panel").hidden=!currentProject();const target=$("pipeline-history");target.replaceChildren();
-  const labels={created:"프로젝트 등록",analyze:"요구사항 정리 요청",save_answers:"답변 저장",requirements_confirmed:"요구사항 확정",requirements_reopened:"요구사항 수정 재개",obligations_saved:"운영·정책 저장",generation_started:"초안 생성 시작",artifact_generated:"초안 생성 완료",generation_failed:"초안 생성 실패",artifact_reviewed:"검토·승인",artifact_edited:"파일 수정",bundle_downloaded:"납품 파일 준비"};
+  const labels={created:"프로젝트 등록",analyze:"요구사항 정리 요청",save_answers:"답변 저장",requirements_confirmed:"요구사항 확정",requirements_reopened:"요구사항 수정 재개",obligations_saved:"운영·정책 저장",generation_started:"초안 생성 시작",artifact_generated:"초안 생성 완료",generation_failed:"초안 생성 실패",artifact_reviewed:"검토·승인",artifact_edited:"파일 수정",erd_edited:"구조 수정",bundle_downloaded:"납품 파일 준비"};
   for(const item of list(state.view?.pipeline?.history)){
     const row=node("article","artifact-row"),stage=item.stage==="requirements"?"요구사항":stageCopy[item.stage]?.title;
     row.append(node("h3",null,`${stage?`${stage} · `:""}${labels[item.kind]||"작업 기록"}`));
@@ -180,7 +180,7 @@ function renderStageNavigation(target,stage){
 }
 function renderArtifactFiles(target,artifact,stage){
   const files=node("details","compact-details");files.append(node("summary",null,`생성한 파일 · ${list(artifact.files).length}개`));
-  const editable=["wireframe","api","backend","frontend"].includes(stage.id) && ["generated","approved"].includes(stage.state);
+  const editable=["wireframe","api","backend","frontend"].includes(stage.id) && stage.can_edit===true;
   const key=`${currentProject().id}:${stage.id}:${artifact.digest}`;
   const outdated=[...state.fileDrafts.entries()].filter(([draftKey])=>draftKey.startsWith(`${currentProject().id}:${stage.id}:`) && draftKey!==key);
   if(outdated.length){
@@ -217,7 +217,7 @@ function renderArtifact(){
   if(stage.state==="running"){target.append(node("p","stage-status status-dot",`${copy.title} 작업을 진행하고 있습니다.`));return;}
   const failed=state.view.pipeline.job?.state==="failed" && state.view.pipeline.job.stage===stage.id;
   if(failed)target.append(node("p","notice error",safeError(state.view.pipeline.job.error)));
-  if(stage.state==="stale")target.append(node("p","notice","앞 단계의 내용이 변경되었습니다. 현재 명세에 맞춰 초안을 다시 만들어 주세요."));
+  if(stage.state==="stale")target.append(node("p","notice",stage.can_edit?"앞 단계의 내용이 변경되었습니다. 파일을 수정하고 이유와 함께 저장하거나 초안을 다시 만들어 주세요.":"앞 단계의 내용이 변경되었습니다. 현재 명세에 맞춰 초안을 다시 만들어 주세요."));
   if(stage.artifact){
     target.append(node("p","stage-status",stage.state==="approved"?"검토 기록과 함께 승인했습니다.":"초안을 만들었습니다. 파일과 확인할 내용을 검토하세요."));
     if(["wireframe","frontend"].includes(stage.id) && ["generated","approved"].includes(stage.state)){

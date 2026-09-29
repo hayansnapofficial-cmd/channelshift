@@ -29,8 +29,8 @@ _POLICY_FILES = frozenset({"frontend/" + name for name in
 REQUIRED_FILES = {
     "wireframe": frozenset({"wireframe/index.html", "wireframe/screens.json"}),
     "api": frozenset({"api/openapi.json"}),
-    "backend": frozenset({"backend/app.py", "backend/README.md"}),
-    "frontend": frozenset({"frontend/index.html", "frontend/app.js", "frontend/style.css"}),
+    "backend": frozenset({"backend/app.py", "backend/README.md", "backend/routes.json"}),
+    "frontend": frozenset({"frontend/index.html", "frontend/app.js", "frontend/style.css", "frontend/screens.json"}),
 }
 _EXTENSIONS = {
     "wireframe": {"html", "css", "json", "md"},
@@ -207,13 +207,24 @@ _STAGE_INSTRUCTIONS = {
         "network assets, or remote dependencies. screens.json must be exactly {\"screens\":[{\"id\":\"SCREEN-001\","
         "\"title\":\"screen title\",\"path\":\"/\",\"requirement_ids\":[\"REQ-001\"]}]}. "
         "Use at most 24 screens with unique screen IDs and route paths, and only client requirement IDs. "
+        "Every confirmed client requirement ID must appear on at least one appropriate screen. "
         "Show relevant empty/error/success states and navigation. Do not invent requirements or business facts."
     ),
     "api": (
         "Create an OpenAPI 3.1 JSON contract for the confirmed screens and native ERD. Use /api/* paths, "
-        "optionally /health, unique operationId values and nonempty responses. Use local #/ references only. "
+        "optionally /health, at most 100 operations with unique operationId values and nonempty responses. Use local #/ references only. "
         "Document request/response schemas, errors and access rules; x-channelshift-table on operations may "
-        "name the exact referenced ERD entity. Do not include remote servers or literal bearer credentials."
+        "name the exact referenced ERD entity. Every operation must include x-channelshift-requirement-ids "
+        "as a nonempty list of confirmed client REQ- IDs, x-channelshift-fields as a list of exact table.column "
+        "ERD field names (empty when no database fields are used), and x-channelshift-screens as a list of "
+        "approved SCREEN- IDs (empty for headless operations). When x-channelshift-table is specified, "
+        "all declared fields must belong to it. All three lists must have unique values. "
+        "Use a bounded JSON Schema subset: explicit types, properties, required, additionalProperties, items, "
+        "enum/const, local nonrecursive refs, allOf/anyOf/oneOf/not, ordinary numeric/string/array bounds "
+        "and annotations. Required names must be declared properties; arrays need items. Request/response "
+        "content must use application/json or application/*+json with a schema; parameters require a "
+        "schema or JSON content, never both. No recursive references or unsupported schema keywords. "
+        "Do not include remote servers or literal bearer credentials."
     ),
     "backend": (
         "Build an actual Python 3.10+ stdlib application matching the supplied API and database schema. "
@@ -224,6 +235,16 @@ _STAGE_INSTRUCTIONS = {
         "validate requests, and enforce specified access rules. No third-party packages, shell commands, "
         "subprocesses, downloads, remote services, default production passwords, or environment secrets. "
         "README must give the exact manual launch and data-file location, limitations, and review steps. "
+        "Declare exactly one literal module-level ROUTES dictionary in backend/app.py with entries like "
+        "('GET', '/api/inquiries'): listInquiries, covering every documented API operation exactly once. "
+        "Each handler must be a top-level Python function with a real implementation, not pass, ellipsis "
+        "or NotImplementedError. Use this table for request dispatch. Add backend/routes.json exactly as "
+        "{\"routes\":[{\"operation_id\":\"listInquiries\",\"handler\":\"listInquiries\","
+        "\"test_file\":\"backend/test_app.py\",\"test_symbol\":\"TestAPI.test_list\"}]}, "
+        "with one binding for every API operation. Include actual backend/test*.py source files with "
+        "referenced top-level test_name functions or Class.test_name methods containing assert or "
+        "self.assert* calls. Test normal and invalid inputs and documented results. These definitions "
+        "are inspected as source only, never executed or represented as passing tests. "
         "Generated source is not run here; do not claim tests, deployment, security or production readiness."
     ),
     "frontend": (
@@ -231,6 +252,12 @@ _STAGE_INSTRUCTIONS = {
         "wireframe, API and backend. Use fetch to relative documented /api routes, render untrusted values "
         "with textContent, handle loading/empty/error/success states and avoid dummy success messages. "
         "No Node, build step, CDN, external libraries, remote assets, service workers or stored bearer keys. "
+        "Add frontend/screens.json exactly as {\"screens\":[{\"screen_id\":\"SCREEN-001\","
+        "\"file\":\"frontend/index.html\",\"operation_ids\":[\"listInquiries\"]}]}. "
+        "Cover every approved wireframe screen ID exactly once, map it to an existing HTML file, and "
+        "declare exactly the operation IDs whose API x-channelshift-screens contains that screen. "
+        "An informational screen can have an empty operation_ids list. Match fetch methods to the API "
+        "operation (omitted method means GET); use literal URLs and literal method values where possible. "
         "index.html must link app.js and style.css, contain exactly one literal " + FOOTER_MARKER + " before "
         "its closing body, and anchor links to /privacy.html,/terms.html,/refund.html,/contact.html. "
         "All HTML pages need a closing body tag. Policy pages and the shared footer are injected by the "

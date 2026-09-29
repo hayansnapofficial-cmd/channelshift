@@ -499,7 +499,8 @@ class DeliveryWorkspace:
             self._jobs.submit(self._run_reference, project, url, job_id)
         return self.get(project_id)
 
-    def generate_erd(self, project_id, database, expected_revision, *, pipeline_job_id=None):
+    def generate_erd(self, project_id, database, expected_revision, *, pipeline_job_id=None,
+                     wireframe_context=None):
         """Queue a schema draft from a frozen, current requirements review."""
         if type(database) is not str or database not in {'postgresql', 'mysql', 'sqlite'} or not _hex_digest(expected_revision):
             raise ValueError('invalid_delivery_input')
@@ -526,11 +527,19 @@ class DeliveryWorkspace:
                     raise ValueError('delivery_storage_limit')
                 snapshot = copy.deepcopy(project['requirements_review'])
                 snapshot['name'] = project['name']
+                if wireframe_context is not None:
+                    from .codex_erd import _input, validate_wireframe_context
+                    snapshot['wireframe_context'] = validate_wireframe_context(wireframe_context,
+                        [row['id'] for row in snapshot['candidate']['requirements'] if row['origin'] == 'client'])
+                    # Bound the complete evidence before reserving a job or storing it.
+                    _input(snapshot, database)
+                wireframe_digest = snapshot.get('wireframe_context', {}).get('digest')
                 job_id = uuid.uuid4().hex
                 db.execute("UPDATE projects SET state='DESIGNING_ERD' WHERE id=?", (project_id,))
                 self._event(db, project_id, 'erd_started', {
                     'job_id': job_id, 'database': database, 'previous_state': project['state'],
                     'pipeline_job_id': pipeline_job_id,
+                    'wireframe_digest': wireframe_digest,
                     'input_snapshot': snapshot, 'review_context_revision': project['review_context_revision'],
                     'approval_granted': False, 'database_executed': False})
             self._active = True
@@ -578,6 +587,7 @@ class DeliveryWorkspace:
                        'source_digest': project['source']['digest'],
                        'answer_context_digest': project['answer_context_digest'],
                        'consent_revision': project['consent_revision'],
+                       'wireframe_digest': snapshot.get('wireframe_context', {}).get('digest'),
                        'traceability_current': True, 'approval_granted': False,
                        'database_executed': False,
                        'previous_revision': project['erd_draft']['revision'] if project['erd_draft'] else None,
@@ -611,7 +621,7 @@ class DeliveryWorkspace:
             with self._lock:
                 self._active = False
 
-    def save_erd(self, project_id, schema, expected_revision):
+    def save_erd(self, project_id, schema, expected_revision, note=None):
         """Save a manual schema revision without reasserting generated mappings."""
         from .core import validate_schema
         if not _hex_digest(expected_revision):
@@ -633,6 +643,9 @@ class DeliveryWorkspace:
                 raise ValueError('delivery_erd_stale')
             if schema == draft['result']['schema']:
                 return project
+            from .codex_intake import _valid_text
+            if not _valid_text(note, 1000):
+                raise ValueError('delivery_erd_note_required')
             if len(project['events']) >= 1000:
                 raise ValueError('delivery_storage_limit')
             result = copy.deepcopy(draft['result'])
@@ -643,6 +656,7 @@ class DeliveryWorkspace:
                 'candidate_revision', 'source_digest', 'answer_context_digest', 'consent_revision')}
             payload.update({'id': uuid.uuid4().hex, 'database': schema['database'],
                             'result': result, 'digest': _digest(result),
+                            'wireframe_digest': draft.get('wireframe_digest'), 'note': note.strip(),
                             'previous_revision': expected_revision, 'actor_type': 'local_operator',
                             'traceability_current': False, 'approval_granted': False,
                             'database_executed': False})

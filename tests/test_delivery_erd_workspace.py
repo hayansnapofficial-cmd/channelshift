@@ -1,6 +1,7 @@
 """Requirement-bound ERD draft history, using only injected local providers."""
 import copy
 from concurrent.futures import ThreadPoolExecutor
+import json
 from pathlib import Path
 import tempfile
 import threading
@@ -8,7 +9,7 @@ import unittest
 from unittest.mock import Mock, patch
 
 from channelshift.codex_intake import CodexIntakeError
-from channelshift.delivery_workspace import DeliveryWorkspace
+from channelshift.delivery_workspace import DeliveryWorkspace, _digest
 
 
 SOURCE = '문의 폼을 제공해 주세요.'
@@ -28,6 +29,15 @@ def design(name='합성 ERD 프로젝트', database='postgresql'):
                             'primary_key': True, 'unique': False}]}], 'relations': []},
             'traceability': [{'entity': 'inquiries', 'requirement_ids': ['REQ-001']}],
             'unmapped_requirements': [], 'notes': ['검토용 초안입니다.']}
+
+
+def wireframe():
+    value = {'files': [
+        {'path': 'wireframe/index.html', 'content': '<html><body><label>문의 내용</label></body></html>'},
+        {'path': 'wireframe/screens.json', 'content': json.dumps({'screens': [
+            {'id': 'SCREEN-001', 'title': '문의 접수', 'path': '/', 'requirement_ids': ['REQ-001']}]})}],
+        'notes': ['확인한 화면 설계'], 'checks': {'screens_count': 1}}
+    return dict(value, digest=_digest(value))
 
 
 class DeliveryErdWorkspaceTests(unittest.TestCase):
@@ -109,6 +119,7 @@ class DeliveryErdWorkspaceTests(unittest.TestCase):
         self.assertEqual(draft['review_context_revision'], reviewed['review_context_revision'])
         self.assertEqual(draft['source_digest'], reviewed['source']['digest'])
         self.assertEqual(draft['candidate_revision'], reviewed['candidate_revision'])
+        self.assertIsNone(draft['wireframe_digest'])
         self.assertTrue(draft['traceability_current'])
         self.assertFalse(draft['stale'])
         self.assertFalse(draft['approval_granted'])
@@ -116,6 +127,54 @@ class DeliveryErdWorkspaceTests(unittest.TestCase):
         self.assertEqual(self.open().get(generated['id']), generated)
         self.review.assert_not_called()
         self.collect.assert_not_called()
+
+    def test_wireframe_is_frozen_for_generation_history_and_manual_edit_lineage(self):
+        reviewed = self.ready()
+        original = wireframe()
+        supplied = copy.deepcopy(original)
+        entered, release = threading.Event(), threading.Event()
+        self.addCleanup(release.set)
+
+        def mutate(snapshot, database):
+            snapshot['wireframe_context']['files'][0]['content'] = '<p>PROVIDER_MUTATION</p>'
+            snapshot['wireframe_context']['digest'] = 'f' * 64
+            entered.set()
+            release.wait(timeout=5)
+            return design(snapshot['name'], database)
+
+        self.generator.side_effect = mutate
+        self.workspace.generate_erd(reviewed['id'], 'sqlite', reviewed['intervention_revision'],
+                                    pipeline_job_id='a' * 32, wireframe_context=supplied)
+        self.assertTrue(entered.wait(timeout=2))
+        supplied['files'][0]['content'] = '<p>CALLER_MUTATION</p>'
+        supplied['digest'] = 'e' * 64
+        release.set()
+        self.drain()
+        generated = self.workspace.get(reviewed['id'])
+        started = next(event['payload'] for event in generated['events'] if event['kind'] == 'erd_started')
+        self.assertEqual(started['input_snapshot']['wireframe_context'], original)
+        self.assertEqual(started['wireframe_digest'], original['digest'])
+        draft = generated['erd_draft']
+        self.assertEqual(draft['wireframe_digest'], original['digest'])
+        self.assertTrue(generated['erd_current'])
+        schema = copy.deepcopy(draft['result']['schema'])
+        schema['entities'][0]['description'] = '문의 화면에 맞춘 설명'
+        saved = self.workspace.save_erd(reviewed['id'], schema, draft['revision'], note='  화면 용어와 통일  ')
+        self.assertEqual(saved['erd_draft']['wireframe_digest'], original['digest'])
+        self.assertEqual(saved['erd_draft']['note'], '화면 용어와 통일')
+        self.assertEqual(saved['events'][-1]['payload']['note'], '화면 용어와 통일')
+        self.assertEqual(self.open().get(reviewed['id']), saved)
+
+    def test_invalid_wireframe_is_rejected_before_event_or_provider_side_effect(self):
+        reviewed = self.ready()
+        invalid = wireframe()
+        invalid['digest'] = 'f' * 64
+        for value in ([], {}, invalid):
+            with self.subTest(value=value), self.assertRaisesRegex(ValueError, '^invalid_erd_input$'):
+                self.workspace.generate_erd(reviewed['id'], 'sqlite', reviewed['intervention_revision'],
+                                            wireframe_context=value)
+            self.assertEqual(self.workspace.get(reviewed['id']), reviewed)
+        self.generator.assert_not_called()
 
     def test_invalid_database_and_stale_retries_never_launch_another_generation(self):
         reviewed = self.ready()
@@ -236,13 +295,15 @@ class DeliveryErdWorkspaceTests(unittest.TestCase):
         draft = generated['erd_draft']
         edited = copy.deepcopy(draft['result']['schema'])
         edited['entities'][0]['name'] = 'requests'
-        saved = self.workspace.save_erd(generated['id'], edited, draft['revision'])
+        saved = self.workspace.save_erd(generated['id'], edited, draft['revision'], note='고객 용어로 테이블명 변경')
         updated = saved['erd_draft']
         self.assertTrue(saved['erd_current'])
         self.assertEqual(updated['result']['schema'], edited)
         self.assertFalse(updated['traceability_current'])
         self.assertEqual(updated['result']['traceability'], draft['result']['traceability'])
         self.assertEqual(updated['generation_id'], draft['generation_id'])
+        self.assertIsNone(updated['wireframe_digest'])
+        self.assertEqual(updated['note'], '고객 용어로 테이블명 변경')
         self.assertEqual(updated['review_context_revision'], draft['review_context_revision'])
         self.assertEqual(updated['previous_revision'], draft['revision'])
         self.assertNotEqual(updated['revision'], draft['revision'])
@@ -269,7 +330,7 @@ class DeliveryErdWorkspaceTests(unittest.TestCase):
         edited['entities'][0]['description'] = '작업자가 수정한 문의 기록'
         def save():
             try:
-                return self.workspace.save_erd(generated['id'], edited, draft['revision'])
+                return self.workspace.save_erd(generated['id'], edited, draft['revision'], note='설명 보완')
             except ValueError as error:
                 return str(error)
         with ThreadPoolExecutor(max_workers=2) as pool:
@@ -277,6 +338,18 @@ class DeliveryErdWorkspaceTests(unittest.TestCase):
         self.assertEqual(sum(type(value) is dict for value in attempts), 1)
         self.assertEqual(attempts.count('delivery_revision_conflict'), 1)
         self.assertEqual(len(self.workspace.get(generated['id'])['erd_history']), 2)
+
+    def test_manual_change_requires_bounded_reason_without_writing_invalid_attempts(self):
+        generated = self.generate(self.ready())
+        draft = generated['erd_draft']
+        schema = copy.deepcopy(draft['result']['schema'])
+        schema['entities'][0]['description'] = '수정한 설명'
+        for note in (None, '', '  ', [], 7, 'x' * 1001, '\ud800', '\x00'):
+            with self.subTest(note=repr(note)), self.assertRaisesRegex(ValueError, '^delivery_erd_note_required$'):
+                self.workspace.save_erd(generated['id'], schema, draft['revision'], note=note)
+            self.assertEqual(self.workspace.get(generated['id']), generated)
+        saved = self.workspace.save_erd(generated['id'], schema, draft['revision'], note='x' * 1000)
+        self.assertEqual(saved['erd_draft']['note'], 'x' * 1000)
 
     def test_saving_unchanged_schema_is_noop_but_still_checks_revision_and_staleness(self):
         generated = self.generate(self.ready())

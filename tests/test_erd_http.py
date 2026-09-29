@@ -108,8 +108,12 @@ class ERDHTTPTests(unittest.TestCase):
             self.assertEqual(self.request(route, session='')[0], 302)
         schema = copy.deepcopy(project['erd_draft']['result']['schema'])
         schema['entities'][0]['attributes'].append({'name': 'editor_note', 'type': 'text', 'nullable': True})
-        data = {'project_id': project['id'], 'schema': schema, 'expected_revision': project['erd_draft']['revision']}
+        data = {'project_id': project['id'], 'schema': schema, 'expected_revision': project['erd_draft']['revision'],
+                'note': '고객 요청으로 편집 메모 항목 추가'}
         self.assertEqual(self.request('/api/delivery/erd/save', data, session='session-b-synthetic')[0], 400)
+        missing_note = {key: value for key, value in data.items() if key != 'note'}
+        self.assertEqual(self.request('/api/delivery/erd/save', missing_note),
+                         (400, {'ok': False, 'error': 'delivery_erd_note_required'}))
         status, body = self.request('/api/delivery/erd/save', data)
         self.assertEqual(status, 200)
         self.assertEqual(body['project']['erd_draft']['result']['schema'], schema)
