@@ -20,6 +20,9 @@ ASSETS = {"/": ("index.html", "text/html; charset=utf-8"), "/app.js": ("app.js",
           "/delivery": ("delivery.html", "text/html; charset=utf-8"),
           "/delivery.js": ("delivery.js", "text/javascript; charset=utf-8"),
           "/delivery.css": ("delivery.css", "text/css; charset=utf-8"),
+          "/workbench": ("workbench.html", "text/html; charset=utf-8"),
+          "/workbench.js": ("workbench.js", "text/javascript; charset=utf-8"),
+          "/workbench.css": ("workbench.css", "text/css; charset=utf-8"),
           "/impact.js": ("impact.js", "text/javascript; charset=utf-8"),
           "/impact.css": ("impact.css", "text/css; charset=utf-8")}
 
@@ -32,7 +35,8 @@ def error_code(error):
                "invalid_delivery_input", "invalid_delivery_project", "delivery_project_not_found",
                "delivery_storage_limit", "delivery_busy", "delivery_recovery_required", "delivery_candidate_required",
                "delivery_revision_conflict", "delivery_input_limit", "delivery_answers_required",
-               "invalid_impact_graph", "invalid_impact_field", "impact_graph_too_complex"}
+               "invalid_impact_graph", "invalid_impact_field", "impact_graph_too_complex",
+               "service_not_configured", "invalid_workbench_settings"}
     return str(error) if type(error) is ValueError and str(error) in allowed else "operation_failed"
 
 
@@ -113,6 +117,9 @@ def handler_factory(store=None, token=None, delivery=None):
                         configured = False
                     value = {"ok": True, "codex": status(), "jev_configured": configured,
                              "stages": [{"id": stage['id'], "title": stage['title']} for stage in standard_site_profile()['stages']]}
+                elif self.path == "/api/workbench/profile":
+                    from .workbench import profile
+                    value = {"ok": True, **profile()}
                 elif self.path == "/api/delivery/projects":
                     value = {"ok": True, "items": intake_workspace().list()}
                 elif self.path.startswith("/api/delivery/projects/"):
@@ -168,6 +175,10 @@ def handler_factory(store=None, token=None, delivery=None):
                     value = {"ok": True, "project": intake_workspace().advance_to_review(**data)}
                 elif self.path == "/api/delivery/back" and set(data) == {"project_id", "expected_revision"}:
                     value = {"ok": True, "project": intake_workspace().return_to_intake(**data)}
+                elif self.path == "/api/delivery/references" and set(data) == {"project_id", "url", "expected_revision"}:
+                    value = {"ok": True, "project": intake_workspace().collect_reference(**data)}
+                elif self.path == "/api/workbench/settings" and set(data) == {"project_id", "section", "values", "expected_revision"}:
+                    value = {"ok": True, "project": intake_workspace().save_settings(**data)}
                 elif self.path == "/api/generate" and set(data) <= {"templateId", "project", "database"}:
                     value = {"ok": True, "schema": create_schema(data["templateId"], data["project"], data.get("database", "postgresql"))}
                 elif self.path == "/api/validate" and set(data) == {"schema"}:

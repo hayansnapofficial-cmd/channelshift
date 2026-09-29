@@ -1,0 +1,35 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="channelshift-token" content="__CHANNELSHIFT_TOKEN__"><meta name="color-scheme" content="light">
+  <title>ChannelShift · 제작 작업실</title><link rel="icon" href="data:,">
+  <link rel="stylesheet" href="/delivery.css"><link rel="stylesheet" href="/workbench.css">
+  <script src="/workbench.js" defer></script>
+</head>
+<body>
+  <header class="app-header"><a class="brand" href="/delivery">ChannelShift</a>
+    <nav aria-label="제작 메뉴"><a href="/delivery">요구사항</a><a href="/">ERD·DB</a><a href="#backend">API·백엔드</a><a href="#security">보안 검수</a><a href="#seo">SEO·공유 설정</a><a href="#delivery">납품 검수</a></nav>
+  </header>
+  <main class="workbench-main">
+    <div class="workbench-heading"><div><p class="muted small">제작 작업실</p><h1 id="section-title">불러오는 중</h1></div><div><label for="project-select">프로젝트</label><select id="project-select"><option value="">프로젝트 선택</option></select></div></div>
+    <p id="section-description"></p><div id="message" class="message" role="status" hidden></div>
+    <div class="workbench-context"><span id="project-stage">프로젝트를 선택하세요.</span><a href="/delivery">요구사항 열기</a></div>
+    <section id="seo-editor" class="work-section" hidden>
+      <div class="section-head"><h2>사이트 기본값</h2><span class="state-label">초안</span></div>
+      <form id="seo-form">
+        <div class="form-grid"><div><label for="seo-site-name">사이트명</label><input id="seo-site-name" maxlength="100"></div><div><label for="seo-url">홈페이지 주소</label><input id="seo-url" type="url" maxlength="2048" placeholder="https://example.com"></div></div>
+        <label for="seo-title">검색·공유 제목</label><input id="seo-title" maxlength="200">
+        <label for="seo-description">설명</label><textarea id="seo-description" maxlength="500" rows="3"></textarea>
+        <label for="seo-image-url">공유 이미지 주소</label><input id="seo-image-url" type="url" maxlength="2048" placeholder="https://example.com/share.png">
+        <label class="checkbox-label"><input id="seo-noindex" type="checkbox">검색 결과에서 제외</label>
+        <div class="form-actions"><button id="save-seo" class="button primary" type="submit" disabled>초안 저장</button></div>
+      </form>
+      <div class="share-preview" aria-label="공유 카드 텍스트 미리보기"><div class="share-image" id="preview-image">공유 이미지 미설정</div><div class="share-copy"><strong id="preview-title">검색·공유 제목</strong><p id="preview-description">설명을 입력하세요.</p><small id="preview-site">사이트 주소</small></div></div>
+      <p class="muted small">텍스트 미리보기입니다. 원격 이미지는 자동으로 불러오지 않습니다.</p>
+    </section>
+    <section class="work-section"><div class="section-head"><h2 id="criteria-title">설계·검수 기준</h2><span class="state-label">미실행</span></div><div id="stage-list" class="stage-list"></div></section>
+    <p id="remaining" class="workbench-limit"></p>
+  </main>
+</body>
+</html>

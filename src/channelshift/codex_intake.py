@@ -87,9 +87,17 @@ OUTPUT_SCHEMA = _object_schema({
 })
 
 
-def _child_environment():
+def _child_environment(codex_home=None):
     # In particular, TYPESAFE_API_KEY and all other provider secrets are absent.
-    return {key: value for key, value in os.environ.items() if key.upper() in _ENV_ALLOW}
+    environment = {key: value for key, value in os.environ.items() if key.upper() in _ENV_ALLOW}
+    if codex_home is not None:
+        home = Path(codex_home)
+        if not home.is_absolute() or not home.is_dir() or home.is_symlink():
+            raise CodexIntakeError("codex_authentication_unverified")
+        # Never mutate process-global environment or inherit the operator's home.
+        environment = {key: value for key, value in environment.items() if key.upper() != "CODEX_HOME"}
+        environment["CODEX_HOME"] = str(home)
+    return environment
 
 
 def _unsafe_provider_environment():
@@ -129,9 +137,9 @@ def _terminate(process):
         raise CodexIntakeError("codex_stop_failed") from None
 
 
-def _run_bounded(arguments, *, cwd, timeout, input_text=None, output_limit=262144):
+def _run_bounded(arguments, *, cwd, timeout, input_text=None, output_limit=262144, codex_home=None):
     """Drain both pipes with a shared bound; no shell, raw logs, or inherited keys."""
-    kwargs = {"cwd": str(cwd), "env": _child_environment(), "shell": False,
+    kwargs = {"cwd": str(cwd), "env": _child_environment(codex_home), "shell": False,
               "stdin": subprocess.PIPE if input_text is not None else subprocess.DEVNULL,
               "stdout": subprocess.PIPE, "stderr": subprocess.PIPE, "bufsize": 0}
     if os.name == "nt":
@@ -220,28 +228,30 @@ def _run_bounded(arguments, *, cwd, timeout, input_text=None, output_limit=26214
     return process.returncode, bytes(chunks[0]), bytes(chunks[1])
 
 
-def _probe(executable):
+def _probe(executable, *, codex_home=None):
     result = {"available": True, "authenticated": False, "auth_mode": "unknown",
               "can_execute": False, "cli_version": None, "reason": "codex_status_failed"}
     with tempfile.TemporaryDirectory(prefix="channelshift-codex-status-") as folder:
-        code, out, err = _run_bounded([executable, "--version"], cwd=folder, timeout=10)
+        options = {"codex_home": codex_home} if codex_home is not None else {}
+        code, out, err = _run_bounded([executable, "--version"], cwd=folder, timeout=10, **options)
         version = (out + err).decode("utf-8", "replace").strip()
         match = re.fullmatch(r"codex-cli ([A-Za-z0-9.+-]{1,80})", version)
         if code != 0 or not match:
             return result
         result["cli_version"] = match.group(1)
-        code, out, err = _run_bounded([executable, "exec", "--help"], cwd=folder, timeout=10)
+        code, out, err = _run_bounded([executable, "exec", "--help"], cwd=folder, timeout=10, **options)
         help_text = (out + err).decode("utf-8", "replace")
         if code != 0 or any(flag not in help_text for flag in _REQUIRED_FLAGS):
             result["reason"] = "codex_unsupported_cli"
             return result
-        code, out, err = _run_bounded([executable, "features", "list"], cwd=folder, timeout=10)
+        code, out, err = _run_bounded([executable, "features", "list"], cwd=folder, timeout=10, **options)
         features = {line.split()[0] for line in (out + err).decode("utf-8", "replace").splitlines()
                     if line.split()}
         if code != 0 or not set((*_DISABLED_FEATURES, "skip_host_skill_discovery")) <= features:
             result["reason"] = "codex_unsupported_cli"
             return result
-        code, out, err = _run_bounded([executable, "login", "status"], cwd=folder, timeout=10)
+        auth_options = ["-c", 'cli_auth_credentials_store="file"', "-c", 'forced_login_method="chatgpt"'] if codex_home is not None else []
+        code, out, err = _run_bounded([executable, *auth_options, "login", "status"], cwd=folder, timeout=10, **options)
         login = (out + err).decode("utf-8", "replace").strip()
         if code == 0 and login == "Logged in using ChatGPT":
             result.update(authenticated=True, auth_mode="chatgpt", can_execute=True, reason="ready")
@@ -254,15 +264,15 @@ def _probe(executable):
     return result
 
 
-def status():
+def status(*, codex_home=None):
     """Return safe local CLI/auth metadata; no token or account identity is returned."""
     empty = {"available": False, "authenticated": False, "auth_mode": "unknown",
              "can_execute": False, "cli_version": None, "reason": "codex_unavailable"}
     try:
         executable = _executable()
-        if _unsafe_provider_environment():
+        if codex_home is None and _unsafe_provider_environment():
             return {**empty, "available": True, "reason": "codex_unsafe_provider_environment"}
-        return _probe(executable)
+        return _probe(executable, codex_home=codex_home) if codex_home is not None else _probe(executable)
     except CodexIntakeError as error:
         return {**empty, "reason": error.code}
     except OSError:
@@ -322,7 +332,7 @@ def _unique_object(pairs):
     return result
 
 
-def _execution_arguments(executable, workspace, schema_path, output_path):
+def _execution_arguments(executable, workspace, schema_path, output_path, *, codex_home=None):
     arguments = [executable, "--no-daemon", "-a", "never", "exec", "--ignore-user-config",
                  "--ignore-rules", "--strict-config", "--sandbox", "read-only", "--ephemeral",
                  "--skip-git-repo-check", "--color", "never", "--json", "--cd", str(workspace),
@@ -332,10 +342,12 @@ def _execution_arguments(executable, workspace, schema_path, output_path):
                  "--enable", "skip_host_skill_discovery"]
     for feature in _DISABLED_FEATURES:
         arguments += ["--disable", feature]
+    if codex_home is not None:
+        arguments += ["-c", 'cli_auth_credentials_store="file"']
     return arguments + ["-"]
 
 
-def extract_requirements(client_request):
+def extract_requirements(client_request, *, codex_home=None):
     """Explicit model call using ChatGPT login; no paid API/provider fallback.
 
     The caller must invoke this only after the operator requests extraction.
@@ -347,9 +359,9 @@ def extract_requirements(client_request):
         raise CodexIntakeError("codex_busy")
     try:
         executable = _executable()
-        if _unsafe_provider_environment():
+        if codex_home is None and _unsafe_provider_environment():
             raise CodexIntakeError("codex_unsafe_provider_environment")
-        connection = _probe(executable)
+        connection = _probe(executable, codex_home=codex_home) if codex_home is not None else _probe(executable)
         if not connection["can_execute"]:
             raise CodexIntakeError(connection["reason"])
         prompt = (
@@ -377,9 +389,10 @@ def extract_requirements(client_request):
             (workspace / ".git").mkdir()
             schema_path, output_path = root / "output-schema.json", root / "candidate.json"
             schema_path.write_text(json.dumps(OUTPUT_SCHEMA, ensure_ascii=True), encoding="utf-8")
-            arguments = _execution_arguments(executable, workspace, schema_path, output_path)
+            arguments = _execution_arguments(executable, workspace, schema_path, output_path, codex_home=codex_home)
+            options = {"codex_home": codex_home} if codex_home is not None else {}
             code, out, err = _run_bounded(arguments, cwd=workspace, timeout=EXECUTION_TIMEOUT,
-                                         input_text=prompt, output_limit=1048576)
+                                         input_text=prompt, output_limit=1048576, **options)
             if code != 0:
                 message = (out + err).decode("utf-8", "replace").lower()
                 if any(item in message for item in ("rate limit", "usage limit", "quota", "limit reached")):

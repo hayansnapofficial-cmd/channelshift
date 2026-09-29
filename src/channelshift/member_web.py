@@ -1,7 +1,7 @@
 """Loopback membership pilot with verified accounts and isolated workspaces.
 
 This is not a public hosting server. Legacy single-operator data is untouched.
-Host Codex/TypeSafe credentials are never delegated to registered members.
+Codex identities are per member. Shared service credentials remain server-side.
 """
 from __future__ import annotations
 
@@ -42,16 +42,33 @@ AUTH_ERRORS = {'invalid_member_input': 400, 'invalid_input': 400, 'invalid_usern
                'member_not_found': 404, 'invalid_admin_request': 400}
 
 
-def _disabled_provider(*_):
-    raise ValueError('member_provider_not_linked')
-
-
-def member_handler_factory(auth, root, token=None):
+def member_handler_factory(auth, root, token=None, *, codex=None, services=None):
+    from .member_codex import MemberCodex
+    from .shared_services import SharedServices, ServiceError
     root = Path(root)
+    codex = codex if codex is not None else MemberCodex(root)
+    services = services if services is not None else SharedServices(root / 'shared-services.sqlite3')
     token = token or secrets.token_urlsafe(32)
     base = handler_factory(token=token)
     members = {}
+    workspaces = {}
     members_lock = threading.Lock()
+
+    def ensure_active(user_id):
+        if not auth.active_member(user_id):
+            raise ServiceError('service_unavailable')
+
+    def extract_for(user_id, text):
+        ensure_active(user_id)
+        return codex.extract_requirements(user_id, text)
+
+    def review_for(user_id, source, requirements):
+        ensure_active(user_id)
+        return services.review_for(user_id)(source, requirements)
+
+    def collect_for(user_id, url):
+        ensure_active(user_id)
+        return services.collect_reference(user_id, url)
 
     def workspace_handler(user):
         user_id = user['id']
@@ -66,14 +83,23 @@ def member_handler_factory(auth, root, token=None):
                     folder.mkdir(mode=0o700, parents=True, exist_ok=True)
                     if os.name != 'nt' and folder.stat().st_mode & 0o077:
                         raise ValueError('unsafe_storage')
-                delivery = DeliveryWorkspace(member_root / 'delivery.sqlite3', extract=_disabled_provider,
-                                             review=_disabled_provider)
+                delivery = DeliveryWorkspace(member_root / 'delivery.sqlite3',
+                    extract=lambda text: extract_for(user_id, text),
+                    review=lambda source, items: review_for(user_id, source, items),
+                    collect=lambda url: collect_for(user_id, url))
+                workspaces[user_id] = delivery
                 members[user_id] = handler_factory(ProjectStore(member_root / 'schemas'), token, delivery)
             return members[user_id]
 
     class MemberHandler(base):
         pending_cookie = None
         redirect_to = None
+
+        @staticmethod
+        def close_resources():
+            codex.close()
+            for workspace in workspaces.values():
+                workspace.close()
 
         def end_headers(self):
             if self.pending_cookie:
@@ -138,6 +164,10 @@ def member_handler_factory(auth, root, token=None):
             self.send(AUTH_ERRORS.get(code, 503), {'ok': False, 'error': code})
 
         def do_GET(self):
+            if self.path.startswith('/api/services/'):
+                if self.guard(api=False):
+                    self.service_request()
+                return
             if not self.guard(api=self.path.startswith('/api/')):
                 return
             if self.path in AUTH_ASSETS:
@@ -160,6 +190,18 @@ def member_handler_factory(auth, root, token=None):
             user = self.authenticated_user()
             if not user:
                 return
+            if self.path == '/api/connections/codex':
+                try:
+                    self.send(200, {'ok': True, 'codex': codex.status(user['id'])})
+                except Exception as error:
+                    self.connection_error(error)
+                return
+            if self.path == '/api/connections/mcp':
+                try:
+                    self.send(200, {'ok': True, 'connection': auth.service_token_status(user['id'])})
+                except Exception as error:
+                    self.auth_error(error)
+                return
             if self.path in ADMIN_ASSETS or self.path.startswith('/api/admin/'):
                 if not self.require_master(user):
                     return
@@ -179,14 +221,18 @@ def member_handler_factory(auth, root, token=None):
                     self.send(404, {'ok': False, 'error': 'not_found'})
                 return
             if self.path == '/api/delivery/status':
-                self.send(200, {'ok': True, 'member_mode': True,
-                                'codex': {'can_execute': False, 'available': False,
-                                          'reason': 'member_provider_not_linked'}, 'jev_configured': False,
+                try:
+                    shared = services.status()
+                    self.send(200, {'ok': True, 'member_mode': True,
+                                'codex': codex.status(user['id']), 'services': shared,
+                                'jev_configured': shared['requirements_review']['available'],
                                 'stages': [{'id': s['id'], 'title': s['title']}
                                            for s in standard_site_profile()['stages']]})
+                except Exception as error:
+                    self.connection_error(error)
                 return
-            if self.path in {'/', '/delivery'}:
-                name = 'index.html' if self.path == '/' else 'delivery.html'
+            if self.path in {'/', '/delivery', '/workbench'}:
+                name = {'/': 'index.html', '/delivery': 'delivery.html', '/workbench': 'workbench.html'}[self.path]
                 payload = (WEB / name).read_text(encoding='utf-8')
                 payload = payload.replace('__CHANNELSHIFT_TOKEN__', token)
                 navigation = '<a class="text-button" href="/login">내 계정</a>'
@@ -201,6 +247,10 @@ def member_handler_factory(auth, root, token=None):
                 self.send(400, {'ok': False, 'error': 'operation_failed'})
 
         def do_POST(self):
+            if self.path.startswith('/api/services/'):
+                if self.guard(api=False):
+                    self.service_request(write=True)
+                return
             if not self.guard(api=True, write=True):
                 return
             if self.path.startswith('/api/auth/'):
@@ -213,13 +263,141 @@ def member_handler_factory(auth, root, token=None):
                 if self.require_master(user):
                     self.admin_post(user)
                 return
-            if self.path in {'/api/delivery/extract', '/api/delivery/jev'}:
-                self.send(403, {'ok': False, 'error': 'member_provider_not_linked'})
+            if self.path.startswith('/api/connections/codex/'):
+                self.connection_post(user)
                 return
+            if self.path.startswith('/api/connections/mcp/'):
+                self.mcp_connection_post(user)
+                return
+            if self.path == '/api/delivery/extract':
+                try:
+                    connection = codex.status(user['id'])
+                    if not connection['can_execute']:
+                        self.send(409 if connection.get('state') == 'busy' else 403,
+                                  {'ok': False, 'error': 'codex_busy' if connection.get('state') == 'busy' else 'codex_authentication_required'})
+                        return
+                except Exception as error:
+                    self.connection_error(error)
+                    return
             try:
                 workspace_handler(user).do_POST(self)
             except (ValueError, OSError):
                 self.send(400, {'ok': False, 'error': 'operation_failed'})
+
+        def read_service_json(self, limit=131072):
+            if self.headers.get('Content-Type', '').split(';')[0].strip() != 'application/json' or self.headers.get('Transfer-Encoding'):
+                raise ValueError('service_invalid_input')
+            length = int(self.headers.get('Content-Length', '-1'))
+            if not 0 < length <= limit:
+                raise ValueError('service_invalid_input')
+            self.connection.settimeout(10)
+            def unique_object(pairs):
+                result = {}
+                for key, value in pairs:
+                    if key in result:
+                        raise ValueError('service_invalid_input')
+                    result[key] = value
+                return result
+            data = json.loads(self.rfile.read(length), object_pairs_hook=unique_object,
+                              parse_constant=lambda _: (_ for _ in ()).throw(ValueError()))
+            if type(data) is not dict:
+                raise ValueError('service_invalid_input')
+            return data
+
+        def mcp_connection_post(self, user):
+            action = self.path.removeprefix('/api/connections/mcp/')
+            if action not in {'create', 'revoke'}:
+                self.send(404, {'ok': False, 'error': 'not_found'})
+                return
+            try:
+                if self.read_service_json(128) != {}:
+                    raise ValueError('invalid_member_input')
+                if action == 'create':
+                    connection = auth.create_service_token(user['id'])
+                else:
+                    auth.revoke_service_token(user['id'])
+                    connection = auth.service_token_status(user['id'])
+                self.send(200, {'ok': True, 'connection': connection})
+            except (ValueError, TypeError, UnicodeError):
+                self.send(400, {'ok': False, 'error': 'invalid_member_input'})
+            except Exception:
+                self.send(503, {'ok': False, 'error': 'operation_failed'})
+
+        def service_request(self, write=False):
+            # MCP uses a distinct member-scoped bearer token, never browser
+            # cookies, host Codex credentials, or a vendor API key from callers.
+            authorization = self.headers.get('Authorization', '')
+            raw = authorization[7:] if authorization.startswith('Bearer ') and len(authorization) < 128 else ''
+            try:
+                user = auth.authenticate_service_token(raw)
+            except Exception:
+                self.send(503, {'ok': False, 'error': 'service_unavailable'})
+                return
+            if not user:
+                self.send(401, {'ok': False, 'error': 'service_connection_required'})
+                return
+            routes = {'/api/services/review': {'source', 'requirements'}, '/api/services/reference': {'url'}}
+            if not write and self.path == '/api/services/status':
+                self.send(200, {'ok': True, 'services': services.status()})
+                return
+            if not write or self.path not in routes:
+                self.send(404, {'ok': False, 'error': 'not_found'})
+                return
+            try:
+                data = self.read_service_json()
+                if set(data) != routes[self.path]:
+                    raise ValueError('service_invalid_input')
+                ensure_active(user['id'])
+                if self.path.endswith('/review'):
+                    result = services.review_for(user['id'])(data['source'], data['requirements'])
+                else:
+                    result = services.collect_reference(user['id'], data['url'])
+                self.send(200, {'ok': True, 'result': result})
+            except ServiceError as error:
+                from .shared_services import SAFE_ERROR_CODES
+                code = str(error) if str(error) in SAFE_ERROR_CODES else 'service_unavailable'
+                self.send(429 if code in {'service_rate_limited', 'service_busy'} else 400,
+                          {'ok': False, 'error': code})
+            except (ValueError, TypeError, UnicodeError):
+                self.send(400, {'ok': False, 'error': 'service_invalid_input'})
+            except Exception:
+                self.send(503, {'ok': False, 'error': 'service_unavailable'})
+
+        def connection_error(self, error):
+            from .member_codex import MemberCodexError
+            from .codex_intake import CodexIntakeError
+            code = str(error) if isinstance(error, (MemberCodexError, CodexIntakeError)) else 'codex_connection_failed'
+            status = 409 if code == 'codex_connection_busy' else 400
+            self.send(status, {'ok': False, 'error': code})
+
+        def connection_post(self, user):
+            action = self.path.removeprefix('/api/connections/codex/')
+            expected = {'start': set(), 'poll': {'connection_id'}, 'cancel': {'connection_id'}, 'disconnect': set()}
+            if action not in expected:
+                self.send(404, {'ok': False, 'error': 'not_found'})
+                return
+            if self.headers.get('Content-Type', '').split(';')[0].strip() != 'application/json' or self.headers.get('Transfer-Encoding'):
+                self.send(415, {'ok': False, 'error': 'json_required'})
+                return
+            try:
+                length = int(self.headers.get('Content-Length', '-1'))
+                if not 0 < length <= 4096:
+                    self.send(413, {'ok': False, 'error': 'payload_too_large'})
+                    return
+                self.connection.settimeout(10)
+                data = json.loads(self.rfile.read(length), parse_constant=lambda _: (_ for _ in ()).throw(ValueError()))
+                if type(data) is not dict or set(data) != expected[action]:
+                    self.send(400, {'ok': False, 'error': 'invalid_member_input'})
+                    return
+                if action == 'start':
+                    value = {'connection': codex.connect(user['id'], self.session_token())}
+                elif action in {'poll', 'cancel'}:
+                    value = {'connection': getattr(codex, action)(user['id'], self.session_token(), data['connection_id'])}
+                else:
+                    value = {'codex': codex.disconnect(user['id'])}
+                self.send(200, {'ok': True, **value})
+            except Exception as error:
+                self.connection_error(error)
 
         def admin_post(self, user):
             if self.path != '/api/admin/member-status':
@@ -238,7 +416,13 @@ def member_handler_factory(auth, root, token=None):
                 if type(data) is not dict or set(data) != {'user_id', 'disabled', 'reason'}:
                     raise ValueError('invalid_admin_request')
                 member = auth.admin_set_disabled(user['id'], **data)
-                self.send(200, {'ok': True, 'member': member})
+                cleanup_pending = False
+                if data['disabled']:
+                    try:
+                        codex.cancel_user(data['user_id'])
+                    except Exception:
+                        cleanup_pending = True
+                self.send(200, {'ok': True, 'member': member, 'connection_cleanup_pending': cleanup_pending})
             except (ValueError, TypeError, KeyError, UnicodeError) as error:
                 if str(error) not in AUTH_ERRORS:
                     error = ValueError('invalid_admin_request')
@@ -264,16 +448,28 @@ def member_handler_factory(auth, root, token=None):
                 if type(data) is not dict or set(data) != fields:
                     raise ValueError('invalid_member_input')
                 if self.path == '/api/auth/logout':
+                    current = auth.authenticate(self.session_token())
                     auth.logout(self.session_token())
                     self.set_session_cookie('', 0)
                     result = {}
+                    if current:
+                        try:
+                            codex.cancel_session(current['id'], self.session_token())
+                        except Exception:
+                            result['connection_cleanup_pending'] = True
                 elif self.path == '/api/auth/login':
-                    result = auth.login(**data)
                     previous = self.session_token()
+                    previous_user = auth.authenticate(previous) if previous else None
+                    result = auth.login(**data)
                     if previous:
                         auth.logout(previous)
                     self.set_session_cookie(result['session_token'])
                     result = {'user': result['user']}
+                    if previous_user:
+                        try:
+                            codex.cancel_session(previous_user['id'], previous)
+                        except Exception:
+                            result['connection_cleanup_pending'] = True
                 elif self.path == '/api/auth/register':
                     result = auth.register(**data)
                 elif self.path == '/api/auth/verify':
@@ -301,12 +497,15 @@ def main():
     root = directory() / 'members'
     origin = 'http://127.0.0.1:' + str(args.port)
     auth = MemberAuth(root / 'accounts.sqlite3', mailer=from_environment(origin))
-    with ThreadingHTTPServer(('127.0.0.1', args.port), member_handler_factory(auth, root)) as server:
+    handler = member_handler_factory(auth, root)
+    with ThreadingHTTPServer(('127.0.0.1', args.port), handler) as server:
         print('ChannelShift members: ' + origin + '/login', file=sys.stderr)
         try:
             server.serve_forever()
         except KeyboardInterrupt:
             pass
+        finally:
+            handler.close_resources()
 
 
 if __name__ == '__main__':

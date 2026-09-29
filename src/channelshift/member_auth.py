@@ -27,6 +27,7 @@ class AuthError(ValueError):
 VERIFICATION_TTL = 30 * 60
 PENDING_TTL = 24 * 60 * 60
 SESSION_TTL = 8 * 60 * 60
+SERVICE_TOKEN_TTL = 30 * 24 * 60 * 60
 MAX_MEMBERS = 1000
 MAX_PENDING = 100
 MAX_SESSIONS_PER_USER = 5
@@ -35,6 +36,8 @@ MAX_AUDIT_RESULTS = 100
 RATE_WINDOW = 10 * 60
 _HASH_SLOTS = threading.BoundedSemaphore(1)
 _TOKEN = re.compile(r"[A-Za-z0-9_-]{43}\Z", re.ASCII)
+_SERVICE_TOKEN = re.compile(r"cs_mcp_[A-Za-z0-9_-]{43}\Z", re.ASCII)
+_MEMBER_ID = re.compile(r"[a-f0-9]{32}\Z", re.ASCII)
 _USERNAME = re.compile(r"[a-z0-9_]{4,32}\Z", re.ASCII)
 _EMAIL_LOCAL = re.compile(r"[a-z0-9.!#$%&'*+/=?^_`{|}~-]+\Z", re.ASCII)
 _EMAIL_LABEL = re.compile(r"[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\Z", re.ASCII)
@@ -160,6 +163,11 @@ class MemberAuth:
                     created REAL NOT NULL, expires REAL NOT NULL
                 );
                 CREATE INDEX IF NOT EXISTS sessions_user ON sessions(user_id, created);
+                CREATE TABLE IF NOT EXISTS service_tokens (
+                    token_hash TEXT PRIMARY KEY,
+                    member_id TEXT NOT NULL UNIQUE REFERENCES members(id) ON DELETE CASCADE,
+                    created REAL NOT NULL, expires REAL NOT NULL
+                );
                 CREATE TABLE IF NOT EXISTS rate_limits (
                     bucket TEXT PRIMARY KEY, started REAL NOT NULL, count INTEGER NOT NULL
                 );
@@ -202,6 +210,7 @@ class MemberAuth:
                    "AND disabled IS NULL AND pending_expires <= ?", (now,))
         db.execute("DELETE FROM verification WHERE expires <= ?", (now,))
         db.execute("DELETE FROM sessions WHERE expires <= ?", (now,))
+        db.execute("DELETE FROM service_tokens WHERE expires <= ?", (now,))
         db.execute("DELETE FROM rate_limits WHERE started <= ?", (now - RATE_WINDOW,))
 
     def _rate(self, action, identity, account_limit, global_limit):
@@ -354,6 +363,64 @@ class MemberAuth:
             db.execute("DELETE FROM sessions WHERE user_id=?", (row["user_id"],))
         return {"verified": True}
 
+    def active_member(self, user_id):
+        """Recheck account eligibility immediately before a queued provider call."""
+        with self._connect() as db:
+            row = db.execute('SELECT * FROM members WHERE id=?', (user_id,)).fetchone()
+            return row is not None and self._active(row)
+
+    @staticmethod
+    def _service_member_id(user_id):
+        if type(user_id) is not str or not _MEMBER_ID.fullmatch(user_id):
+            raise AuthError("invalid_member_input")
+        return user_id
+
+    def create_service_token(self, user_id):
+        """Issue one platform-service credential, replacing the member's old one.
+
+        Callers must bind user_id to their authenticated browser session. This
+        credential is separate from browser sessions and vendor API keys; its
+        original value is returned only here, after the hash has been committed.
+        """
+        user_id = self._service_member_id(user_id)
+        with self._connect() as db:
+            db.execute("BEGIN IMMEDIATE")
+            row = db.execute("SELECT * FROM members WHERE id=?", (user_id,)).fetchone()
+            if row is None or not self._active(row):
+                raise AuthError("invalid_credentials")
+            now = self.clock()
+            token = "cs_mcp_" + secrets.token_urlsafe(32)
+            expires = now + SERVICE_TOKEN_TTL
+            db.execute("DELETE FROM service_tokens WHERE member_id=?", (user_id,))
+            db.execute("INSERT INTO service_tokens (token_hash, member_id, created, expires) VALUES (?, ?, ?, ?)",
+                       (_digest(token), user_id, now, expires))
+        return {"token": token, "expires_at": expires, "token_type": "Bearer"}
+
+    def authenticate_service_token(self, token):
+        """Authenticate a platform-service bearer without creating a UI session."""
+        if type(token) is not str or not _SERVICE_TOKEN.fullmatch(token):
+            return None
+        with self._connect() as db:
+            row = db.execute("SELECT m.* FROM service_tokens t JOIN members m ON m.id=t.member_id "
+                             "WHERE t.token_hash=? AND t.expires>?", (_digest(token), self.clock())).fetchone()
+            return self._user(row) if row is not None and self._active(row) else None
+
+    def service_token_status(self, user_id):
+        """Return expiry metadata only; never recover or disclose a token hash."""
+        user_id = self._service_member_id(user_id)
+        with self._connect() as db:
+            row = db.execute("SELECT t.expires FROM service_tokens t JOIN members m ON m.id=t.member_id "
+                             "WHERE t.member_id=? AND t.expires>? AND m.disabled IS NULL "
+                             "AND (m.verified IS NOT NULL OR (m.role='master' AND m.bootstrapped IS NOT NULL))",
+                             (user_id, self.clock())).fetchone()
+        return {"connected": row is not None, "expires_at": row["expires"] if row else None}
+
+    def revoke_service_token(self, user_id):
+        """Idempotently revoke only the specified member's platform credential."""
+        user_id = self._service_member_id(user_id)
+        with self._connect() as db:
+            db.execute("DELETE FROM service_tokens WHERE member_id=?", (user_id,))
+
     def login(self, username, password):
         try:
             username, encoded = normalize_username(username), _password(password, minimum=1)
@@ -454,6 +521,7 @@ class MemberAuth:
                 self._audit(db, now, actor_id, user_id, "member_disabled" if disabled else "member_enabled", reason.strip())
             if disabled:
                 db.execute("DELETE FROM sessions WHERE user_id=?", (user_id,))
+                db.execute("DELETE FROM service_tokens WHERE member_id=?", (user_id,))
             row = db.execute("SELECT * FROM members WHERE id=?", (user_id,)).fetchone()
         return self._member_metadata(row)
 

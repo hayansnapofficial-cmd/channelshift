@@ -124,6 +124,20 @@ class StatusTests(unittest.TestCase):
             self.assertEqual(intake.status()['reason'], 'codex_unsupported_cli')
             self.assertEqual(runner.call_count, 2)
 
+    def test_isolated_status_passes_home_everywhere_and_forces_file_credentials(self):
+        with tempfile.TemporaryDirectory() as folder, \
+             patch.dict(os.environ, {'CODEX_HOME': 'host-home', 'OPENAI_API_KEY': 'host-api-key'}), \
+             patch.object(intake, '_executable', return_value='codex'), \
+             patch.object(intake, '_run_bounded', side_effect=self.probe_outputs('Logged in using ChatGPT')) as runner:
+            home = Path(folder)
+            self.assertTrue(intake.status(codex_home=home)['can_execute'])
+            self.assertEqual(runner.call_count, 4)
+            for call in runner.call_args_list:
+                self.assertEqual(call.kwargs['codex_home'], home)
+            self.assertIn('cli_auth_credentials_store="file"', runner.call_args.args[0])
+            self.assertIn('forced_login_method="chatgpt"', runner.call_args.args[0])
+            self.assertEqual(os.environ['CODEX_HOME'], 'host-home')
+
 
 class ExtractionTests(unittest.TestCase):
     def call_with(self, transport, request=REQUEST):
@@ -215,8 +229,47 @@ class ExtractionTests(unittest.TestCase):
         finally:
             intake._EXECUTION_LOCK.release()
 
+    def test_member_extract_passes_only_its_explicit_home_and_preserves_restrictions(self):
+        with tempfile.TemporaryDirectory() as folder:
+            home = Path(folder)
+
+            def transport(arguments, **options):
+                self.assertEqual(options['codex_home'], home)
+                self.assertIn('cli_auth_credentials_store="file"', arguments)
+                self.assertIn('forced_login_method="chatgpt"', arguments)
+                self.assertIn('--ignore-user-config', arguments)
+                self.assertEqual(arguments[arguments.index('--sandbox') + 1], 'read-only')
+                for feature in intake._DISABLED_FEATURES:
+                    self.assertIn(feature, arguments)
+                Path(arguments[arguments.index('--output-last-message') + 1]).write_text(
+                    json.dumps(candidate()), encoding='utf-8')
+                return 0, b'', b''
+
+            with patch.dict(os.environ, {'CODEX_HOME': 'host-home', 'OPENAI_API_KEY': 'host-api-key'}), \
+                 patch.object(intake, '_executable', return_value='codex'), \
+                 patch.object(intake, '_probe', return_value=ready()) as probe, \
+                 patch.object(intake, '_run_bounded', side_effect=transport):
+                self.assertEqual(intake.extract_requirements(REQUEST, codex_home=home), candidate())
+                probe.assert_called_once_with('codex', codex_home=home)
+                self.assertEqual(os.environ['CODEX_HOME'], 'host-home')
+
 
 class BoundedProcessTests(unittest.TestCase):
+    def test_real_child_gets_explicit_home_without_host_provider_secrets(self):
+        script = 'import json,os; print(json.dumps(dict(os.environ)))'
+        with tempfile.TemporaryDirectory() as folder, \
+             patch.dict(os.environ, {'CODEX_HOME': 'host-home', 'OPENAI_API_KEY': 'host-api-key',
+                                     'TYPESAFE_API_KEY': 'host-other-key'}):
+            home = Path(folder)
+            code, out, err = intake._run_bounded([sys.executable, '-B', '-c', script], cwd=home,
+                                                timeout=5, codex_home=home)
+            environment = json.loads(out)
+            self.assertEqual(code, 0)
+            self.assertEqual(environment['CODEX_HOME'], str(home))
+            self.assertNotIn('OPENAI_API_KEY', environment)
+            self.assertNotIn('TYPESAFE_API_KEY', environment)
+            self.assertEqual(os.environ['CODEX_HOME'], 'host-home')
+
     def test_real_subprocess_drains_both_pipes_and_preserves_utf8_stdin(self):
         script = 'import sys; data=sys.stdin.buffer.read(); sys.stdout.buffer.write(data); sys.stderr.buffer.write(b"err")'
         with tempfile.TemporaryDirectory() as folder:

@@ -84,9 +84,9 @@ class MasterHTTPTests(unittest.TestCase):
         self.assertEqual(self.call('/api/delivery/projects/' + created['project']['id'], self.master_session)[0], 400)
         self.assertIn('href="/admin"', self.call('/delivery', self.master_session)[1])
         self.assertNotIn('href="/admin"', self.call('/delivery', self.member_session)[1])
-        for operation in ('extract', 'jev'):
+        for operation, expected_status in [('extract', 403), ('jev', 400)]:
             self.assertEqual(self.call('/api/delivery/' + operation, self.master_session,
-                                       {'project_id': owner_project})[0], 403)
+                                       {'project_id': owner_project})[0], expected_status)
 
     def test_suspend_restore_revoke_and_audit(self):
         command = {'user_id': self.member['id'], 'disabled': True, 'reason': 'Synthetic QA suspension'}

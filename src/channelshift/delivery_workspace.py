@@ -82,11 +82,12 @@ def _text(value, limit, required=True):
 
 
 class DeliveryWorkspace:
-    def __init__(self, path=None, extract=None, review=None):
+    def __init__(self, path=None, extract=None, review=None, collect=None):
         from .codex_intake import extract_requirements
         from .jev_review import review_requirements
         self.extract = extract or extract_requirements
         self.review = review or review_requirements
+        self.collect = collect
         root = Path(os.environ.get("CHANNELSHIFT_HOME", Path.home() / ".channelshift"))
         self.path = Path(path) if path is not None else root / "delivery.sqlite3"
         self.path.parent.mkdir(parents=True, exist_ok=True)
@@ -160,6 +161,12 @@ class DeliveryWorkspace:
         for event in events:
             event['payload'] = json.loads(event['payload'])
         result['events'] = events
+        result['references'] = [dict(event['payload']['result']) for event in events
+                                if event['kind'] == 'reference_recorded']
+        settings = [event['payload'] for event in events if event['kind'] == 'workspace_settings_saved']
+        result['workspace_settings'] = {item['section']: item['values'] for item in settings}
+        result['settings_revisions'] = {'seo': _digest({'project_id': project_id, 'section': 'seo', 'values': None})}
+        result['settings_revisions'].update({item['section']: item['revision'] for item in settings})
         result['consent_history'] = [dict(event['payload'], created_at=event['created_at'])
                                      for event in events if event['kind'] == 'consent_policy_recorded']
         consent = result['consent_history'][-1] if result['consent_history'] else None
@@ -219,6 +226,12 @@ class DeliveryWorkspace:
         result['requirements_review'] = result['review_history'][-1] if active_review else None
         if last_navigation:
             context['workflow_sequence'] = last_navigation['sequence']
+        reference_events = [event for event in events if event['kind'] in
+                            {'reference_started', 'reference_recorded', 'reference_failed'}]
+        if reference_events:
+            # A retry of an old collection request must not launch another paid
+            # call. Keep this out of the client-evidence review snapshot.
+            context['reference_sequence'] = reference_events[-1]['sequence']
         result['intervention_revision'] = _digest(context)
         return result
 
@@ -231,7 +244,7 @@ class DeliveryWorkspace:
             current = self._get(db, project_id)
             if expected_revision != current['intervention_revision']:
                 raise ValueError('delivery_revision_conflict')
-            if current['state'] in {'EXTRACTING', 'REVIEWING'}:
+            if current['state'] in {'EXTRACTING', 'REVIEWING', 'COLLECTING_REFERENCE'}:
                 raise ValueError('delivery_busy')
             if not current['candidate']:
                 raise ValueError('delivery_candidate_required')
@@ -264,7 +277,7 @@ class DeliveryWorkspace:
             current = self._get(db, project_id)
             if expected_revision != current['intervention_revision']:
                 raise ValueError('delivery_revision_conflict')
-            if current['state'] in {'EXTRACTING', 'REVIEWING'}:
+            if current['state'] in {'EXTRACTING', 'REVIEWING', 'COLLECTING_REFERENCE'}:
                 raise ValueError('delivery_busy')
             if len(current['events']) >= 1000:
                 raise ValueError('delivery_storage_limit')
@@ -315,7 +328,7 @@ class DeliveryWorkspace:
                              if item['question_id'] == question_id and item['question_digest'] == question_digest), None)
             if selected is None or selected['answer_revision'] != expected_revision:
                 raise ValueError('delivery_revision_conflict')
-            if current['state'] in {'EXTRACTING', 'REVIEWING'}:
+            if current['state'] in {'EXTRACTING', 'REVIEWING', 'COLLECTING_REFERENCE'}:
                 raise ValueError('delivery_busy')
             if len(current['events']) >= 1000:
                 raise ValueError('delivery_storage_limit')
@@ -357,6 +370,24 @@ class DeliveryWorkspace:
             self._event(db, project_id, 'human_intervention', payload)
         return self.get(project_id)
 
+    def save_settings(self, project_id, section, values, expected_revision):
+        from .workbench import validate_settings
+        values = validate_settings(section, values)
+        if not _hex_digest(expected_revision):
+            raise ValueError('invalid_delivery_input')
+        with self._connect() as db:
+            db.execute('BEGIN IMMEDIATE')
+            project = self._get(db, project_id)
+            if project['settings_revisions'][section] != expected_revision:
+                raise ValueError('delivery_revision_conflict')
+            if len(project['events']) >= 1000:
+                raise ValueError('delivery_storage_limit')
+            payload = {'section': section, 'values': values, 'previous_revision': expected_revision,
+                       'approved': False, 'applied_to_site': False}
+            payload['revision'] = _digest(payload)
+            self._event(db, project_id, 'workspace_settings_saved', payload)
+            return self._get(db, project_id)
+
     def start(self, project_id, operation):
         if operation not in {'extract', 'jev'}:
             raise ValueError('invalid_delivery_input')
@@ -365,7 +396,7 @@ class DeliveryWorkspace:
                 raise ValueError('delivery_busy')
             with self._connect() as db:
                 db.execute('BEGIN IMMEDIATE')
-                if db.execute("SELECT 1 FROM projects WHERE state IN ('EXTRACTING','REVIEWING') LIMIT 1").fetchone():
+                if db.execute("SELECT 1 FROM projects WHERE state IN ('EXTRACTING','REVIEWING','COLLECTING_REFERENCE') LIMIT 1").fetchone():
                     raise ValueError('delivery_recovery_required')
                 project = self._get(db, project_id)
                 if operation == 'jev' and not project['candidate']:
@@ -385,6 +416,56 @@ class DeliveryWorkspace:
             self._active = True
             self._jobs.submit(self._run, project, operation, job_id)
         return self.get(project_id)
+
+    def collect_reference(self, project_id, url, expected_revision):
+        """Collect one explicitly requested reference without changing client evidence."""
+        url = _text(url, 2048)
+        if not _hex_digest(expected_revision):
+            raise ValueError('invalid_delivery_input')
+        if self.collect is None:
+            raise ValueError('service_not_configured')
+        with self._lock:
+            if self._active:
+                raise ValueError('delivery_busy')
+            with self._connect() as db:
+                db.execute('BEGIN IMMEDIATE')
+                if db.execute("SELECT 1 FROM projects WHERE state IN ('EXTRACTING','REVIEWING','COLLECTING_REFERENCE') LIMIT 1").fetchone():
+                    raise ValueError('delivery_recovery_required')
+                project = self._get(db, project_id)
+                if project['intervention_revision'] != expected_revision:
+                    raise ValueError('delivery_revision_conflict')
+                if len(project['events']) >= 990 or len(project['references']) >= 20:
+                    raise ValueError('delivery_storage_limit')
+                job_id = uuid.uuid4().hex
+                db.execute("UPDATE projects SET state='COLLECTING_REFERENCE' WHERE id=?", (project_id,))
+                self._event(db, project_id, 'reference_started', {'job_id': job_id, 'url': url})
+            self._active = True
+            self._jobs.submit(self._run_reference, project, url, job_id)
+        return self.get(project_id)
+
+    def _run_reference(self, project, url, job_id):
+        from .shared_services import ServiceError, SAFE_ERROR_CODES as SERVICE_CODES
+        started = time.monotonic()
+        try:
+            result = self.collect(url)
+            encoded = json.dumps(result, ensure_ascii=False, allow_nan=False)
+            if len(encoded.encode('utf-8')) > 131072:
+                raise ServiceError('reference_too_large')
+            payload = {'job_id': job_id, 'result': result,
+                       'elapsed_ms': round((time.monotonic() - started) * 1000)}
+            kind = 'reference_recorded'
+        except Exception as error:
+            code = str(error) if isinstance(error, ServiceError) and str(error) in SERVICE_CODES else 'service_unavailable'
+            payload = {'job_id': job_id, 'code': code,
+                       'elapsed_ms': round((time.monotonic() - started) * 1000)}
+            kind = 'reference_failed'
+        try:
+            with self._connect() as db:
+                db.execute('UPDATE projects SET state=? WHERE id=?', (project['state'], project['id']))
+                self._event(db, project['id'], kind, payload)
+        finally:
+            with self._lock:
+                self._active = False
 
     def _run(self, project, operation, job_id):
         started = time.monotonic()
@@ -409,7 +490,9 @@ class DeliveryWorkspace:
         except Exception as error:
             from .codex_intake import CodexIntakeError, SAFE_ERROR_CODES as CODEX_CODES
             from .jev_review import JevError, SAFE_ERROR_CODES as JEV_CODES
-            code = str(error) if isinstance(error, (CodexIntakeError, JevError)) and str(error) in CODEX_CODES | JEV_CODES else 'delivery_job_failed'
+            from .shared_services import ServiceError, SAFE_ERROR_CODES as SERVICE_CODES
+            from .member_codex import MemberCodexError, SAFE_ERROR_CODES as MEMBER_CODEX_CODES
+            code = str(error) if isinstance(error, (CodexIntakeError, MemberCodexError, JevError, ServiceError)) and str(error) in CODEX_CODES | MEMBER_CODEX_CODES | JEV_CODES | SERVICE_CODES else 'delivery_job_failed'
             with self._connect() as db:
                 db.execute("UPDATE projects SET state='NEEDS_ATTENTION' WHERE id=?", (project['id'],))
                 self._event(db, project['id'], 'job_failed', {'job_id': job_id, 'operation': operation,

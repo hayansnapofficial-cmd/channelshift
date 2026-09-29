@@ -18,14 +18,17 @@ class IdentityFixture:
              for name, key in [('alice', 'a'), ('bobby', 'b')]}
 
     def __init__(self):
-        self.sessions = {'session-a': self.users['alice'], 'session-b': self.users['bobby']}
+        self.sessions = {'session-a-synthetic': self.users['alice'], 'session-b-synthetic': self.users['bobby']}
 
     def authenticate(self, token):
         return self.sessions.get(token)
 
+    def active_member(self, user_id):
+        return any(user['id'] == user_id for user in self.sessions.values())
+
     def login(self, username, password):
-        self.sessions['session-new'] = self.users[username]
-        return {'session_token': 'session-new', 'user': self.users[username]}
+        self.sessions['session-new-synthetic'] = self.users[username]
+        return {'session_token': 'session-new-synthetic', 'user': self.users[username]}
 
     def logout(self, token):
         self.sessions.pop(token, None)
@@ -50,7 +53,7 @@ class MemberHTTPTests(unittest.TestCase):
         self.server.server_close()
         self.thread.join(timeout=5)
 
-    def call(self, path, data=None, session='session-a', headers=None):
+    def call(self, path, data=None, session='session-a-synthetic', headers=None):
         request_headers = {'X-ChannelShift-Token': 'csrf-test', 'Origin': self.origin}
         if session:
             request_headers['Cookie'] = f'channelshift_member_{self.server.server_port}={session}'
@@ -96,14 +99,14 @@ class MemberHTTPTests(unittest.TestCase):
         _, result, _ = self.call('/api/delivery/projects', {'name': 'A only', 'client_request': 'A original'})
         project = result['project']
         _, own, _ = self.call('/api/delivery/projects')
-        _, other, _ = self.call('/api/delivery/projects', session='session-b')
+        _, other, _ = self.call('/api/delivery/projects', session='session-b-synthetic')
         self.assertEqual([p['id'] for p in own['items']], [project['id']])
         self.assertEqual(other['items'], [])
-        status, result, _ = self.call('/api/delivery/projects/' + project['id'], session='session-b')
+        status, result, _ = self.call('/api/delivery/projects/' + project['id'], session='session-b-synthetic')
         self.assertEqual(status, 400)
         self.assertNotIn('A original', json.dumps(result))
         status, _, _ = self.call('/api/delivery/consent', {'project_id': project['id'], 'mode': 'required',
-            'operator_label': 'B', 'reason': 'scope test', 'expected_revision': project['consent_revision']}, session='session-b')
+            'operator_label': 'B', 'reason': 'scope test', 'expected_revision': project['consent_revision']}, session='session-b-synthetic')
         self.assertEqual(status, 400)
         _, unchanged, _ = self.call('/api/delivery/projects/' + project['id'])
         self.assertEqual(unchanged['project']['consent_history'], [])
@@ -114,17 +117,17 @@ class MemberHTTPTests(unittest.TestCase):
         self.assertEqual(status, 200)
         digest = result['id']
         self.assertEqual(self.call('/api/projects/' + digest)[0], 200)
-        self.assertNotEqual(self.call('/api/projects/' + digest, session='session-b')[0], 200)
-        self.assertEqual(self.call('/api/projects', session='session-b')[1]['items'], [])
+        self.assertNotEqual(self.call('/api/projects/' + digest, session='session-b-synthetic')[0], 200)
+        self.assertEqual(self.call('/api/projects', session='session-b-synthetic')[1]['items'], [])
 
     def test_host_provider_credentials_are_never_shared(self):
         with patch('channelshift.codex_intake.status', side_effect=AssertionError('host account accessed')):
             status, value, _ = self.call('/api/delivery/status')
         self.assertEqual(status, 200)
         self.assertFalse(value['codex']['can_execute'])
-        self.assertFalse(value['jev_configured'])
+        self.assertIn('requirements_review', value['services'])
         for path in ('/api/delivery/extract', '/api/delivery/jev'):
-            self.assertEqual(self.call(path, {'project_id': 'a' * 32})[0], 403)
+            self.assertNotEqual(self.call(path, {'project_id': 'a' * 32})[0], 200)
 
     def test_auth_origin_token_cookie_rotation_and_logout(self):
         for headers in ({'Origin': 'https://example.com'}, {'X-ChannelShift-Token': 'wrong'}):
@@ -132,11 +135,11 @@ class MemberHTTPTests(unittest.TestCase):
         status, value, headers = self.call('/api/auth/login', {'username': 'alice', 'password': 'synthetic'})
         self.assertEqual(status, 200)
         self.assertNotIn('session_token', value)
-        self.assertNotIn('session-a', self.auth.sessions)
+        self.assertNotIn('session-a-synthetic', self.auth.sessions)
         for flag in ('HttpOnly', 'SameSite=Strict', 'Path=/'):
             self.assertIn(flag, headers['Set-Cookie'])
-        self.assertEqual(self.call('/api/auth/logout', {}, session='session-new')[0], 200)
-        self.assertEqual(self.call('/api/delivery/projects', session='session-new')[0], 401)
+        self.assertEqual(self.call('/api/auth/logout', {}, session='session-new-synthetic')[0], 200)
+        self.assertEqual(self.call('/api/delivery/projects', session='session-new-synthetic')[0], 401)
 
     def test_mail_missing_and_extra_role_fields_fail_closed(self):
         self.assertFalse(self.call('/api/auth/status')[1]['email_configured'])

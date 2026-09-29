@@ -11,17 +11,24 @@ from mcp import Client, StdioServerParameters
 
 
 class MCPTests(unittest.TestCase):
-    def test_all_eight_tools_over_stdio(self):
+    def test_local_and_platform_tools_over_stdio(self):
         async def exercise(folder):
             parameters = StdioServerParameters(command=sys.executable, args=["-m", "channelshift.mcp_server"],
-                                                env={**os.environ, "CHANNELSHIFT_HOME": folder})
+                                                env={**os.environ, "CHANNELSHIFT_HOME": folder,
+                                                     "CHANNELSHIFT_SERVICE_TOKEN_FILE": str(Path(folder) / 'missing-platform-token')})
             async with Client(parameters, mode="legacy", read_timeout_seconds=20) as client:
                 tools = (await client.list_tools()).tools
-                expected = {"list_templates", "create_schema_from_template", "validate_schema", "export_sql", "export_java", "save_project", "list_projects", "get_project"}
+                remote = {'service_status', 'review_requirements', 'collect_reference'}
+                billed = {'review_requirements', 'collect_reference'}
+                expected = {"list_templates", "create_schema_from_template", "validate_schema", "export_sql", "export_java", "save_project", "list_projects", "get_project"} | remote
                 self.assertEqual(expected, {item.name for item in tools})
                 for tool in tools:
-                    self.assertFalse(tool.annotations.open_world_hint)
-                    self.assertEqual(tool.name != "save_project", tool.annotations.read_only_hint)
+                    self.assertEqual(tool.name in remote, tool.annotations.open_world_hint)
+                    self.assertEqual(tool.name not in billed | {'save_project'}, tool.annotations.read_only_hint)
+                    self.assertEqual(tool.name not in billed, tool.annotations.idempotent_hint)
+                    if tool.name in remote:
+                        self.assertNotIn('Apify', tool.description)
+                        self.assertNotIn('Jev', tool.description)
                 async def use(name, args=None):
                     result = await client.call_tool(name, args or {})
                     self.assertFalse(result.is_error, result.content)
@@ -37,10 +44,18 @@ class MCPTests(unittest.TestCase):
                 self.assertFalse((await use("save_project", {"schema": schema, "topic": "booking"}))["stored"])
                 self.assertEqual(1, len((await use("list_projects"))["items"]))
                 self.assertEqual(schema, (await use("get_project", {"project_id": saved["id"]}))["schema"])
-                for name, arguments in (("validate_schema", {"schema": "TEST_SECRET_MARKER"}), ("list_templates", {"path": "TEST_SECRET_MARKER"}), ("get_project", {"project_id": "../../TEST_SECRET_MARKER"})):
+                for name, arguments in (("validate_schema", {"schema": "TEST_SECRET_MARKER"}), ("list_templates", {"path": "TEST_SECRET_MARKER"}), ("get_project", {"project_id": "../../TEST_SECRET_MARKER"}),
+                                        ('review_requirements', {'source': 'text', 'requirements': ['TEST_SECRET_MARKER']}),
+                                        ('collect_reference', {'url': 'https://www.python.org/', 'actor': 'TEST_SECRET_MARKER'})):
                     result = await client.call_tool(name, arguments)
                     self.assertTrue(result.is_error)
                     self.assertNotIn("TEST_SECRET_MARKER", str(result.model_dump()))
+                for name, arguments in [('service_status', {}), ('collect_reference', {'url': 'https://www.python.org/'}),
+                                        ('review_requirements', {'source': 'text', 'requirements': [
+                                            {'id': 'REQ-1', 'text': 'requirement', 'quote': 'text', 'origin': 'client'}]})]:
+                    result = await client.call_tool(name, arguments)
+                    self.assertTrue(result.is_error)
+                    self.assertEqual(result.structured_content['error'], 'service_connection_required')
                 self.assertEqual(1, len(list(Path(folder).rglob("*.json"))))
         with tempfile.TemporaryDirectory(prefix="channelshift-mcp-test-") as folder:
             asyncio.run(exercise(folder))

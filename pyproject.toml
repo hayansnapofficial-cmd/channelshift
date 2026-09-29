@@ -9,8 +9,8 @@ description = "Independent database starter templates, schema editor and MCP for
 readme = "README.md"
 requires-python = ">=3.10"
 license = "MIT"
-license-files = ["LICENSE", "THIRD_PARTY_NOTICES.md", "docs/dependency-licenses/**/*"]
-dependencies = ["mcp==2.2.0"]
+license-files = ["LICENSE", "THIRD_PARTY_NOTICES.md", "docs/dependency-licenses/**/*", "docs/service-dependency-licenses/**/*"]
+dependencies = ["mcp==2.2.0", "apify-client==2.5.1", "httpx==0.28.1"]
 
 [project.scripts]
 channelshift-mcp = "channelshift.mcp_server:main"

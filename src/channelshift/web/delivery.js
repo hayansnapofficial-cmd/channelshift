@@ -2,12 +2,12 @@
 
 (() => {
   const $ = (id) => document.getElementById(id);
-  const state = { status: null, project: null, projects: [], pending: false, advancing: false, timer: null, sequence: 0, interventionRevision: null, answerDrafts: new Map(), consentDrafts: new Map() };
+  const state = { status: null, project: null, projects: [], pending: false, advancing: false, timer: null, sequence: 0, interventionRevision: null, answerDrafts: new Map(), consentDrafts: new Map(), connection: null, connectionBusy: false, connectionTimer: null, connectionSequence: 0, referenceDrafts: new Map(), mcpConnection: null, mcpToken: "", mcpBusy: false, mcpSequence: 0, mcpDisplayAllowed: false };
   const consentModes = { undecided: "미결정", required: "사용", not_required: "사용 안함" };
-  const labels = { RECEIVED: "접수됨", EXTRACTING: "Codex 정리 중", RUNNING: "작업 중", REVIEW_REQUIRED: "검토 필요", REVIEWING: "Jev 검토 중", NEEDS_ATTENTION: "문제 확인 필요" };
+  const labels = { RECEIVED: "접수됨", EXTRACTING: "Codex 정리 중", RUNNING: "작업 중", REVIEW_REQUIRED: "검토 필요", REVIEWING: "요구사항 검토 중", COLLECTING_REFERENCE: "참고 자료 수집 중", NEEDS_ATTENTION: "문제 확인 필요" };
   const reasons = { missing_client_info: "고객 정보 부족", contradictory_requirements: "요구사항 모순", model_error: "모델 오류", nonstandard_request: "표준 밖 요청", access_approval: "권한·승인 확인", quality_issue: "품질 문제", other: "기타" };
   const errors = {
-    member_provider_not_linked: "회원 본인의 Codex 연결이 필요합니다. 회원용 연결 기능은 준비 중입니다.",
+    member_provider_not_linked: "내 Codex 연결에서 본인 계정으로 로그인하세요.",
     login_required: "로그인이 만료되었습니다. 입력 내용을 보관한 뒤 내 계정에서 다시 로그인하세요.",
     invalid_token: "연결 확인이 만료되었습니다. 입력 내용을 따로 보관한 뒤 페이지를 새로고침하세요.",
     invalid_origin: "연결 주소를 확인할 수 없습니다. 로컬 ChannelShift 주소에서 다시 열어 주세요.",
@@ -30,9 +30,9 @@
     project_not_found: "프로젝트를 찾지 못했습니다. 목록을 새로고침하세요.",
     not_found: "요청한 항목을 찾지 못했습니다. 페이지를 새로고침하세요.",
     codex_unavailable: "이 컴퓨터에서 Codex를 찾지 못했습니다. Codex 설치와 실행 상태를 확인하세요.",
-    codex_not_authenticated: "기존 Codex 앱에서 본인 계정으로 공식 로그인을 완료한 뒤 연결을 다시 확인하세요.",
-    codex_login_required: "기존 Codex 앱에서 본인 계정으로 공식 로그인을 완료한 뒤 연결을 다시 확인하세요.",
-    codex_authentication_required: "기존 Codex 앱에서 본인 계정으로 공식 로그인을 완료한 뒤 연결을 다시 확인하세요.",
+    codex_not_authenticated: "본인 계정으로 Codex 로그인을 완료한 뒤 연결을 다시 확인하세요.",
+    codex_login_required: "본인 계정으로 Codex 로그인을 완료한 뒤 연결을 다시 확인하세요.",
+    codex_authentication_required: "본인 계정으로 Codex 로그인을 완료한 뒤 연결을 다시 확인하세요.",
     codex_authentication_unverified: "Codex 인증 방식을 확인하지 못했습니다. 기존 Codex 앱에서 본인 구독 로그인을 확인하세요.",
     codex_unsafe_provider_environment: "구독 외 연결 설정이 감지되었습니다. 담당자에게 실행 환경 확인을 요청하세요.",
     codex_unsupported_cli: "현재 Codex 버전은 이 실행 방식과 호환되지 않습니다. 담당자에게 버전 확인을 요청하세요.",
@@ -43,24 +43,47 @@
     subscription_required: "본인 구독으로 연결된 Codex 계정이 필요합니다. Codex 앱의 로그인 방식을 확인하세요.",
     codex_subscription_required: "본인 구독으로 연결된 Codex 계정이 필요합니다. Codex 앱의 로그인 방식을 확인하세요.",
     codex_rate_limited: "Codex 이용 한도에 도달했습니다. 한도 초기화 후 연결을 확인하고 다시 요청하세요.",
-    jev_not_configured: "이 컴퓨터의 Jev 연결 설정이 필요합니다. 담당자에게 TypeSafe 연결 설정을 요청하세요.",
-    jev_key_missing: "이 컴퓨터의 Jev 연결 설정이 필요합니다. 담당자에게 TypeSafe 연결 설정을 요청하세요.",
-    jev_auth_failed: "Jev 인증을 확인하지 못했습니다. 담당자에게 이 컴퓨터의 TypeSafe 연결 점검을 요청하세요.",
-    jev_rate_limited: "Jev 이용 한도에 도달했습니다. TypeSafe 이용 상태를 확인한 뒤 다시 요청하세요.",
-    jev_unavailable: "Jev에 연결할 수 없습니다. 잠시 후 다시 요청하세요.",
-    candidate_required: "내 Codex로 요구사항을 먼저 정리한 뒤 Jev 검토를 요청하세요.",
+    jev_not_configured: "요구사항 검토를 위한 서버 연결이 필요합니다. 담당자에게 연결 설정을 요청하세요.",
+    jev_key_missing: "요구사항 검토를 위한 서버 연결이 필요합니다. 담당자에게 연결 설정을 요청하세요.",
+    jev_auth_failed: "요구사항 검토 연결을 확인하지 못했습니다. 담당자에게 서버 연결 점검을 요청하세요.",
+    jev_rate_limited: "요구사항 검토 이용 한도에 도달했습니다. 잠시 후 다시 요청하세요.",
+    jev_unavailable: "요구사항 검토 서비스에 연결할 수 없습니다. 잠시 후 다시 요청하세요.",
+    candidate_required: "내 Codex로 요구사항을 먼저 정리한 뒤 검토를 요청하세요.",
+    service_not_configured: "서버 연결이 필요합니다. 담당자에게 서비스 연결 설정을 요청하세요.",
+    service_rate_limited: "서비스 이용 한도에 도달했습니다. 잠시 후 다시 요청하세요.",
+    service_busy: "서비스에서 다른 작업을 처리 중입니다. 잠시 후 다시 요청하세요.",
+    service_unavailable: "서비스에 연결하지 못했습니다. 잠시 후 다시 요청하세요.",
+    service_invalid_input: "입력 항목을 확인하고 다시 요청하세요.",
+    rate_limited: "서비스 이용 한도에 도달했습니다. 잠시 후 다시 요청하세요.",
+    unavailable: "서비스에 연결하지 못했습니다. 잠시 후 다시 요청하세요.",
+    invalid_input: "입력 항목을 확인하고 다시 요청하세요.",
+    reference_url_invalid: "수집할 수 있는 공개 페이지의 주소를 입력하세요.",
+    reference_unavailable: "페이지를 가져오지 못했습니다. 주소와 공개 여부를 확인하세요.",
+    reference_redirect_refused: "페이지 이동을 확인할 수 없어 가져오기를 중단했습니다. 최종 공개 페이지의 주소를 입력하세요.",
+    reference_too_large: "페이지가 수집 한도를 초과했습니다. 범위가 작은 페이지를 선택하세요.",
+    reference_empty: "페이지에서 참고할 내용을 찾지 못했습니다. 다른 공개 페이지를 선택하세요.",
+    codex_connection_pending: "Codex 연결이 진행 중입니다. 공식 로그인 화면에서 인증을 완료하세요.",
+    codex_connection_expired: "로그인 코드가 만료되었습니다. 내 Codex 연결을 다시 시작하세요.",
+    codex_connection_not_found: "진행 중인 연결을 찾지 못했습니다. 내 Codex 연결을 다시 시작하세요.",
+    codex_connection_failed: "Codex 연결을 완료하지 못했습니다. 잠시 후 다시 연결하세요.",
     project_busy: "이 프로젝트의 작업이 진행 중입니다. 결과를 기다린 뒤 다시 시도하세요.",
     busy: "작업이 진행 중입니다. 결과를 기다린 뒤 다시 시도하세요.",
     payload_too_large: "입력 내용이 너무 큽니다. 담당자와 접수 범위를 확인해 주세요.",
     operation_failed: "작업을 마치지 못했습니다. 연결 상태와 작업 이력을 확인한 뒤 다시 시도하세요.",
   };
-  const running = (project) => Boolean(project && ["EXTRACTING", "REVIEWING", "RUNNING"].includes(project.state));
+  const running = (project) => Boolean(project && ["EXTRACTING", "REVIEWING", "RUNNING", "COLLECTING_REFERENCE"].includes(project.state));
   const text = (value) => typeof value === "string" ? value : "";
   const list = (value) => Array.isArray(value) ? value : [];
   function node(tag, className, value) { const el = document.createElement(tag); if (className) el.className = className; if (value !== undefined) el.textContent = String(value); return el; }
   function message(value, error = false) { $("message").textContent = value; $("message").classList.toggle("error", error); $("message").hidden = !value; }
   function date(value) { const time = new Date(value); return Number.isNaN(time.getTime()) ? "" : time.toLocaleString("ko-KR", { dateStyle: "short", timeStyle: "short" }); }
   function safeError(code) { return errors[code] || "작업을 마치지 못했습니다. 연결 상태와 작업 이력을 확인해 주세요."; }
+  function publicUrl(value) {
+    try { const url = new URL(value); return ["http:", "https:"].includes(url.protocol) && !url.username && !url.password ? url.href : null; } catch { return null; }
+  }
+  function officialLoginUrl(value) {
+    try { const url = new URL(value); return url.protocol === "https:" && ["auth.openai.com", "chatgpt.com"].includes(url.hostname) && !url.username && !url.password && !url.port ? url.href : null; } catch { return null; }
+  }
   async function api(path, body) {
     const options = { headers: { "X-ChannelShift-Token": document.querySelector('meta[name="channelshift-token"]').content }, credentials: "same-origin", cache: "no-store" };
     if (body !== undefined) { options.method = "POST"; options.headers["Content-Type"] = "application/json"; options.body = JSON.stringify(body); }
@@ -70,6 +93,141 @@
     try { result = await response.json(); } catch { throw new Error("응답을 읽지 못했습니다. 서버 상태를 확인한 뒤 다시 시도하세요."); }
     if (!response.ok || result.ok !== true) { const error = new Error(safeError(result.error)); error.status = response.status; error.code = result.error; throw error; }
     return result;
+  }
+  function connectionMessage(value, error = false) {
+    const target = $("codex-connection-message"); target.textContent = value; target.hidden = !value; target.classList.toggle("answer-conflict", error);
+  }
+  function renderConnection() {
+    const codex = state.status?.codex || {};
+    const member = state.status?.member_mode === true;
+    const pending = state.connection?.state === "pending";
+    const pendingElsewhere = codex.state === "pending" && !pending;
+    const connected = codex.can_execute === true;
+    const codexBusy = codex.state === "busy";
+    $("codex-status").textContent = !state.status ? "연결 상태 확인 필요" : codexBusy ? "작업 중" : pending || pendingElsewhere ? "로그인 대기 중" : connected ? "연결됨" : codex.state === "expired" ? "로그인 만료" : codex.available === false ? "연결 준비 필요" : member ? "연결 필요" : "Codex 앱 로그인 필요";
+    $("codex-status").title = connected || pending || codexBusy ? "" : safeError(codex.reason);
+    $("codex-help").textContent = pendingElsewhere ? "이전에 시작한 연결이 있습니다. 연결을 초기화한 뒤 다시 시작할 수 있습니다." : member ? "회원 본인의 계정을 연결합니다. 요구사항 정리에는 내 계정 한도를 사용합니다." : "이 컴퓨터의 Codex 앱에서 본인 계정으로 로그인한 뒤 새로고침하세요.";
+    $("codex-connection-actions").hidden = !member;
+    $("connect-codex").hidden = connected || pending || pendingElsewhere || codexBusy;
+    $("connect-codex").disabled = state.connectionBusy || codex.available === false;
+    $("connect-codex").textContent = state.connectionBusy ? "연결 확인 중…" : "내 Codex 연결";
+    $("disconnect-codex").hidden = (!connected && !pendingElsewhere) || pending || codexBusy;
+    $("disconnect-codex").textContent = pendingElsewhere ? "연결 초기화" : "연결 해제";
+    $("disconnect-codex").disabled = state.connectionBusy || state.pending || state.advancing || running(state.project);
+    $("cancel-codex-login").disabled = state.connectionBusy;
+    $("codex-login").hidden = !member || !pending;
+    $("codex-login-code").textContent = pending ? text(state.connection.user_code) : "";
+    $("codex-login-code").hidden = !$("codex-login-code").textContent;
+    const loginUrl = pending ? officialLoginUrl(state.connection.verification_url) : null;
+    if (loginUrl) $("codex-login-link").href = loginUrl; else $("codex-login-link").removeAttribute("href");
+    $("codex-login-link").hidden = !loginUrl;
+    $("codex-login-instruction").textContent = loginUrl ? "공식 로그인 화면에서 아래 코드를 입력하세요." : "공식 로그인 정보를 준비하고 있습니다.";
+    $("codex-login-help").textContent = loginUrl ? "로그인을 마치면 연결 상태가 자동으로 갱신됩니다. 코드는 다른 사람에게 공유하지 마세요." : pending && state.connection.verification_url ? "공식 로그인 주소를 확인하지 못했습니다. 연결을 취소한 뒤 다시 시도하세요." : "잠시 기다리면 로그인 주소와 코드가 표시됩니다.";
+  }
+  function stopConnectionPoll() { clearTimeout(state.connectionTimer); state.connectionTimer = null; }
+  function scheduleConnectionPoll() {
+    stopConnectionPoll();
+    if (document.hidden || state.connection?.state !== "pending" || !state.connection.connection_id) return;
+    state.connectionTimer = setTimeout(pollConnection, 3000);
+  }
+  async function refreshCodexConnection() {
+    if (state.status?.member_mode !== true) return;
+    const result = await api("/api/connections/codex"); if (state.status?.member_mode === true) state.status.codex = result.codex || {};
+  }
+  async function acceptConnection(result) {
+    const connection = result.connection;
+    if (!connection || typeof connection.state !== "string") throw new Error("연결 응답을 확인하지 못했습니다. 연결 상태를 새로고침하세요.");
+    state.connection = connection;
+    if (connection.state === "pending") {
+      if (!text(connection.connection_id)) throw new Error("연결 응답을 확인하지 못했습니다. 연결 상태를 새로고침하세요.");
+      connectionMessage("");
+    } else {
+      stopConnectionPoll();
+      state.connection = null;
+      await refreshCodexConnection();
+      const notices = { connected: "내 Codex가 연결되었습니다.", cancelled: "연결을 취소했습니다.", disconnected: "연결을 취소했습니다.", expired: errors.codex_connection_expired, failed: safeError(connection.reason || "codex_connection_failed") };
+      connectionMessage(notices[connection.state] || "연결 상태를 확인하세요.", ["failed", "expired"].includes(connection.state));
+    }
+    renderConnection(); controls(); scheduleConnectionPoll();
+  }
+  async function pollConnection() {
+    if (document.hidden || state.connection?.state !== "pending" || !state.connection.connection_id) return;
+    const sequence = state.connectionSequence;
+    const connectionId = state.connection.connection_id;
+    try {
+      const result = await api("/api/connections/codex/poll", { connection_id: connectionId });
+      if (sequence !== state.connectionSequence || document.hidden) return;
+      await acceptConnection(result);
+    } catch (error) {
+      if (sequence !== state.connectionSequence) return;
+      connectionMessage(error.message, true);
+      if (["login_required", "invalid_token", "codex_connection_expired", "codex_connection_not_found"].includes(error.code)) { state.connection = null; renderConnection(); return; }
+    } finally { if (sequence === state.connectionSequence) scheduleConnectionPoll(); }
+  }
+  async function connectionAction(action) {
+    if (state.connectionBusy || state.status?.member_mode !== true) return;
+    const connectionId = state.connection?.connection_id;
+    if (action === "cancel" && !connectionId) return;
+    stopConnectionPoll(); ++state.connectionSequence; state.connectionBusy = true; connectionMessage(""); renderConnection(); controls();
+    try {
+      const result = await api(`/api/connections/codex/${action}`, action === "cancel" ? { connection_id: connectionId } : {});
+      if (action === "disconnect") { state.connection = null; state.status.codex = result.codex || {}; connectionMessage("내 Codex 연결을 해제했습니다."); }
+      else await acceptConnection(result);
+    } catch (error) { connectionMessage(error.message, true); }
+    finally { state.connectionBusy = false; renderConnection(); controls(); scheduleConnectionPoll(); }
+  }
+  function mcpMessage(value, error = false) {
+    const target = $("mcp-message"); target.textContent = value; target.hidden = !value; target.classList.toggle("answer-conflict", error);
+  }
+  function clearMcpToken() {
+    state.mcpToken = ""; state.mcpDisplayAllowed = false; $("mcp-token").value = ""; $("mcp-token").type = "password";
+    $("mcp-token-panel").hidden = true; $("reveal-mcp-token").textContent = "키 보기"; $("reveal-mcp-token").setAttribute("aria-pressed", "false");
+  }
+  function renderMcpConnection() {
+    const member = state.status?.member_mode === true;
+    $("mcp-connection-panel").hidden = !member;
+    if (!member) clearMcpToken();
+    const connected = state.mcpConnection?.connected === true;
+    const expiry = state.mcpConnection?.expires_at;
+    $("mcp-status").textContent = state.mcpConnection ? connected ? "연결 키 발급됨" : "연결 안 됨" : "연결 상태 확인 필요";
+    $("mcp-status").title = connected && typeof expiry === "number" ? `${date(expiry * 1000)} 만료` : "";
+    $("create-mcp-token").disabled = state.mcpBusy;
+    $("create-mcp-token").textContent = state.mcpBusy ? "처리 중…" : "연결 키 발급";
+    $("revoke-mcp-token").hidden = !connected;
+    $("revoke-mcp-token").disabled = state.mcpBusy;
+    $("mcp-token").value = state.mcpToken;
+    $("mcp-token-panel").hidden = !state.mcpToken;
+    ["reveal-mcp-token", "copy-mcp-token", "save-mcp-token"].forEach((id) => { $(id).disabled = state.mcpBusy || !state.mcpToken; });
+    $("mcp-config-example").textContent = `CHANNELSHIFT_SERVICE_URL=${window.location.origin}\nCHANNELSHIFT_SERVICE_TOKEN_FILE=저장한/channelshift-service-token.txt의/전체/경로`;
+  }
+  async function refreshMcpConnection() {
+    if (state.status?.member_mode !== true || state.mcpBusy) return;
+    const sequence = ++state.mcpSequence; state.mcpBusy = true; clearMcpToken(); mcpMessage(""); renderMcpConnection();
+    try {
+      const result = await api("/api/connections/mcp");
+      if (sequence === state.mcpSequence) state.mcpConnection = result.connection || null;
+    } catch (error) { if (sequence === state.mcpSequence) { state.mcpConnection = null; mcpMessage(error.message, true); } }
+    finally { if (sequence === state.mcpSequence) { state.mcpBusy = false; renderMcpConnection(); } }
+  }
+  async function mcpAction(action) {
+    if (state.mcpBusy || state.status?.member_mode !== true) return;
+    const sequence = ++state.mcpSequence; state.mcpBusy = true; clearMcpToken(); mcpMessage(""); renderMcpConnection();
+    state.mcpDisplayAllowed = !document.hidden && $("mcp-connection-panel").open;
+    try {
+      const result = await api(`/api/connections/mcp/${action}`, {});
+      if (sequence !== state.mcpSequence) return;
+      if (action === "create") {
+        const token = text(result.connection?.token);
+        if (!token || token.length > 4096 || /\s/.test(token)) throw new Error("연결 키 응답을 확인하지 못했습니다. 연결 상태를 새로고침하세요.");
+        state.mcpConnection = { connected: true, expires_at: result.connection.expires_at };
+        if (state.mcpDisplayAllowed && !document.hidden && $("mcp-connection-panel").open) {
+          state.mcpToken = token; mcpMessage("연결 키를 발급했습니다. 키 파일을 저장해 내 AI 도구에 연결하세요.");
+        } else mcpMessage("연결 키를 발급했지만 화면이 닫혀 표시를 지웠습니다. 키가 필요하면 다시 발급하세요.");
+      } else {
+        state.mcpConnection = result.connection || { connected: false, expires_at: null }; mcpMessage("MCP 연결을 해제했습니다.");
+      }
+    } catch (error) { if (sequence === state.mcpSequence) mcpMessage(error.message, true); }
+    finally { if (sequence === state.mcpSequence) { state.mcpBusy = false; renderMcpConnection(); } }
   }
   function answerKey(project, saved) { return `${project.id}:${project.candidate_revision}:${saved.question_digest}`; }
   function nextStepProblem(project) {
@@ -90,8 +248,11 @@
     const pending = state.pending || state.advancing;
     const busy = pending || running(state.project);
     $("create-project").disabled = pending;
-    $("extract").disabled = busy || !state.project || state.status?.codex?.can_execute !== true;
+    $("extract").disabled = busy || state.connectionBusy || !state.project || state.status?.codex?.can_execute !== true;
     $("review-jev").disabled = busy || !state.project?.candidate || state.status?.jev_configured !== true;
+    $("collect-reference").disabled = busy || !state.project || state.status?.services?.reference_collect?.available !== true;
+    $("collect-reference").textContent = state.project?.state === "COLLECTING_REFERENCE" ? "가져오는 중…" : "자료 가져오기";
+    $("reference-url").disabled = busy;
     $("save-intervention").disabled = pending || !state.project;
     $("save-consent").disabled = pending || !state.project;
     $("consent-rebase").disabled = pending;
@@ -105,12 +266,16 @@
     $("next-step-help").textContent = state.advancing ? "답변을 저장하고 검수 화면을 준비하고 있습니다." : nextProblem || "작성한 답변을 모두 저장하고 요구사항 검수로 이동합니다.";
     $("back-to-intake").disabled = busy || state.project?.workflow_stage !== "requirements_review";
     $("extract").textContent = state.project?.state === "EXTRACTING" ? "정리 중…" : "Codex로 정리";
-    $("review-jev").textContent = state.project?.state === "REVIEWING" ? "검토 중…" : "Jev 검토";
+    $("review-jev").textContent = state.project?.state === "REVIEWING" ? "검토 중…" : "요구사항 검토";
+    renderConnection();
+    renderMcpConnection();
   }
   async function refreshStatus() {
     $("refresh-status").disabled = true;
     try {
       state.status = await api("/api/delivery/status");
+      if (state.status.member_mode === true) await refreshCodexConnection();
+      if (state.status.member_mode === true) await refreshMcpConnection();
       if (Array.isArray(state.status.stages) && state.status.stages.length) {
         const selectedStage = $("stage-id").value;
         $("stage-id").replaceChildren(...state.status.stages.map((stage) => {
@@ -119,11 +284,10 @@
         if (state.status.stages.some((stage) => stage.id === selectedStage)) $("stage-id").value = selectedStage;
         if (state.project) renderHistory(state.project);
       }
-      const codex = state.status.codex || {};
-      $("codex-status").textContent = codex.can_execute === true ? "연결됨" : codex.available === true && codex.authenticated !== true ? "Codex 앱 로그인 필요" : "연결 확인 필요";
-      $("codex-status").title = codex.can_execute === true ? "" : safeError(codex.reason);
-      $("jev-status").textContent = state.status.jev_configured === true ? "연결됨" : "설정 필요";
-    } catch (error) { state.status = null; $("codex-status").textContent = "확인 실패"; $("jev-status").textContent = "확인 실패"; message(error.message, true); }
+      renderConnection();
+      $("jev-status").textContent = state.status.jev_configured === true ? "사용 가능" : "서버 연결 필요";
+      $("references-status").textContent = state.status.services?.reference_collect?.available === true ? "사용 가능" : "서버 연결 필요";
+    } catch (error) { state.status = null; $("codex-status").textContent = "확인 실패"; $("jev-status").textContent = "확인 실패"; $("references-status").textContent = "확인 실패"; message(error.message, true); }
     finally { $("refresh-status").disabled = false; controls(); }
   }
   function renderList() {
@@ -152,10 +316,25 @@
   function renderJev(project) {
     const target = $("jev-results"); target.replaceChildren();
     if (!project.jev) return;
-    target.append(node("p", "muted small", project.jev.status === "completed" || project.jev.status === "COMPLETE" ? "Jev 대조 결과" : "Jev 검토 기록"));
+    target.append(node("p", "muted small", project.jev.status === "completed" || project.jev.status === "COMPLETE" ? "요구사항 검토 결과" : "요구사항 검토 기록"));
     const judgments = { supported: "입력 근거에서 확인됨", unsupported: "입력 근거를 찾지 못함", contradicted: "입력 근거와 모순될 수 있음", unclear: "추가 확인 필요" };
     list(project.jev.items).forEach((item) => { const row = node("article", "result-item"); row.append(node("strong", null, text(item.requirement_id) || "요구사항 확인"), node("p", null, judgments[item.judgment] || "판정 내용 확인 필요")); if (typeof item.confidence === "number" && Number.isFinite(item.confidence)) row.append(node("p", "muted small", `신뢰도 ${item.confidence}`)); target.append(row); });
     if (!list(project.jev.items).length) target.append(node("p", "empty-result", "결과 없음"));
+  }
+  function renderReferences(project) {
+    const references = list(project.references); const target = $("reference-results"); target.replaceChildren();
+    $("reference-count").textContent = `${references.length}개`;
+    $("reference-url").value = state.referenceDrafts.get(project.id) || "";
+    references.slice().reverse().forEach((item) => {
+      const row = node("article", "result-item reference-item");
+      row.append(node("h3", null, text(item.title) || "수집한 참고 자료"));
+      const url = publicUrl(item.url);
+      if (url) { const link = node("a", "reference-link", url); link.href = url; link.target = "_blank"; link.rel = "noopener noreferrer"; row.append(link); }
+      row.append(node("p", "muted small", [date(item.collected_at), "참고용 · 요구사항 확정 전"].filter(Boolean).join(" · ")));
+      if (text(item.text)) { const details = node("details", "reference-text"); details.append(node("summary", null, "수집 내용 보기"), node("p", null, text(item.text))); row.append(details); }
+      target.append(row);
+    });
+    if (!references.length) target.append(node("p", "empty-result", "저장된 참고 자료가 없습니다."));
   }
   function renderQuestions(project) {
     const target = $("questions"); target.replaceChildren();
@@ -232,7 +411,8 @@
     const events = $("events"); events.replaceChildren();
     list(project.events).slice().reverse().forEach((item) => {
       const row = node("article", "history-item"); const kind = text(item.type) || text(item.event) || text(item.kind);
-      const eventNames = { source_registered: "고객 원문 접수", job_started: item.payload?.operation === "jev" ? "Jev 검토 시작" : "Codex 정리 시작", candidate_recorded: "요구사항 초안 저장", advice_recorded: "Jev 대조 의견 저장", job_failed: "작업 실패 · 확인 필요", human_intervention: "사람 개입 기록", question_answered: "질문 답변 저장", consent_policy_recorded: "동의 화면 설정 저장", requirements_review_requested: "요구사항 검수로 이동", intake_reopened: "접수로 돌아감" };
+      const operationNames = { jev: "요구사항 검토 시작", extract: "Codex 정리 시작", codex: "Codex 정리 시작", reference: "참고 자료 수집 시작", reference_collect: "참고 자료 수집 시작" };
+      const eventNames = { source_registered: "고객 원문 접수", job_started: operationNames[item.payload?.operation] || "작업 시작", candidate_recorded: "요구사항 초안 저장", advice_recorded: "요구사항 검토 의견 저장", reference_recorded: "참고 자료 저장", reference_failed: "참고 자료 수집 실패 · 확인 필요", job_failed: "작업 실패 · 확인 필요", human_intervention: "사람 개입 기록", question_answered: "질문 답변 저장", consent_policy_recorded: "동의 화면 설정 저장", requirements_review_requested: "요구사항 검수로 이동", intake_reopened: "접수로 돌아감" };
       row.append(node("p", null, eventNames[kind] || "작업 상태 기록"), node("small", null, date(item.created_at || item.at)));
       const code = item.payload?.code || item.error; if (code) row.append(node("p", null, safeError(code))); events.append(row);
     });
@@ -286,6 +466,7 @@
     $("requirements-review-panel").hidden = !inReview;
     if (project.candidate) { const requirements = list(project.candidate.requirements); const fromClient = (item) => ["client", "customer", "client_original"].includes(item.origin); resultList("client-requirements", requirements.filter(fromClient), "client"); resultList("internal-requirements", requirements.filter((item) => !fromClient(item)), "internal"); renderQuestions(project); resultList("out-of-scope", list(project.candidate.out_of_scope), "scope"); renderJev(project); }
     renderHistory(project);
+    renderReferences(project);
     renderConsent(project);
     if (inReview) renderRequirementsReview(project);
     controls();
@@ -308,6 +489,7 @@
       let detail = error.message;
       if (error.status === 409 && path === "/api/delivery/answer") detail = "질문이나 저장된 답변이 변경되었습니다. 작성 중인 답변은 보존했습니다. 최신 내용을 확인해 주세요.";
       if (error.status === 409 && path === "/api/delivery/consent") detail = "저장된 설정이 변경되었습니다. 작성 중인 내용은 보존했습니다. 최신 설정을 확인해 주세요.";
+      if (error.status === 409 && path === "/api/delivery/references") detail = "프로젝트가 변경되어 자료 수집을 시작하지 않았습니다. 입력한 주소는 보존했습니다. 최신 내용을 확인한 뒤 다시 요청하세요.";
       if (error.status === 409 && ["/api/delivery/next", "/api/delivery/back"].includes(path)) detail = "요구사항·답변 또는 진행 단계가 변경되어 이동하지 않았습니다. 최신 내용을 확인하고 다시 진행하세요. 미저장 입력은 보존했습니다.";
       message(detail, true);
       if (error.status === 409 && state.project) { const id = state.project.id; try { const result = await api(`/api/delivery/projects/${encodeURIComponent(id)}`); state.project = result.project; if (path === "/api/delivery/intervention" && error.code === "delivery_revision_conflict") state.interventionRevision = state.project.intervention_revision; renderProject(); schedulePoll(); } catch {} }
@@ -364,7 +546,38 @@
   });
   $("intake-form").addEventListener("submit", async (event) => { event.preventDefault(); const name = $("project-name").value.trim(); const request = $("client-request").value; if (!name || !request.trim()) { message("프로젝트명과 원문을 입력하세요.", true); return; } if (Array.from(request).length > 12000) { message("원문은 12,000자까지 저장할 수 있습니다. 내용을 줄여 주세요.", true); return; } if (await mutation("/api/delivery/projects", { name, client_request: request }, "원문 저장됨")) $("intake-form").reset(); });
   $("extract").addEventListener("click", () => { if (state.project && !$("extract").disabled) mutation("/api/delivery/extract", { project_id: state.project.id }, "Codex 정리 요청됨"); });
-  $("review-jev").addEventListener("click", () => { if (state.project && !$("review-jev").disabled) mutation("/api/delivery/jev", { project_id: state.project.id }, "Jev 검토 요청됨"); });
+  $("review-jev").addEventListener("click", () => { if (state.project && !$("review-jev").disabled) mutation("/api/delivery/jev", { project_id: state.project.id }, "요구사항 검토 요청됨"); });
+  $("connect-codex").addEventListener("click", () => connectionAction("start"));
+  $("cancel-codex-login").addEventListener("click", () => connectionAction("cancel"));
+  $("disconnect-codex").addEventListener("click", () => connectionAction("disconnect"));
+  $("create-mcp-token").addEventListener("click", () => mcpAction("create"));
+  $("revoke-mcp-token").addEventListener("click", () => mcpAction("revoke"));
+  $("mcp-connection-panel").addEventListener("toggle", () => { if (!$("mcp-connection-panel").open) clearMcpToken(); });
+  $("reveal-mcp-token").addEventListener("click", () => {
+    if (!state.mcpToken || state.mcpBusy) return;
+    const visible = $("mcp-token").type === "password"; $("mcp-token").type = visible ? "text" : "password";
+    $("reveal-mcp-token").textContent = visible ? "키 숨기기" : "키 보기"; $("reveal-mcp-token").setAttribute("aria-pressed", String(visible));
+  });
+  $("copy-mcp-token").addEventListener("click", async () => {
+    if (!state.mcpToken || state.mcpBusy) return;
+    try { await navigator.clipboard.writeText(state.mcpToken); mcpMessage("연결 키를 복사했습니다."); }
+    catch { mcpMessage("복사하지 못했습니다. 키 파일 저장을 사용하세요.", true); }
+  });
+  $("save-mcp-token").addEventListener("click", () => {
+    if (!state.mcpToken || state.mcpBusy) return;
+    const url = URL.createObjectURL(new Blob([state.mcpToken], { type: "text/plain;charset=utf-8" }));
+    const link = node("a"); link.href = url; link.download = "channelshift-service-token.txt"; link.hidden = true;
+    document.body.append(link); link.click(); link.remove(); setTimeout(() => URL.revokeObjectURL(url), 1000);
+    mcpMessage("키 파일 저장을 요청했습니다. 저장한 파일의 전체 경로를 MCP 설정에 넣으세요.");
+  });
+  $("reference-url").addEventListener("input", () => { if (state.project) state.referenceDrafts.set(state.project.id, $("reference-url").value); });
+  $("reference-form").addEventListener("submit", async (event) => {
+    event.preventDefault(); if (!state.project || $("collect-reference").disabled) return;
+    const projectId = state.project.id; const url = $("reference-url").value.trim();
+    state.referenceDrafts.set(projectId, url);
+    if (!publicUrl(url) || url.length > 2000) { message(errors.reference_url_invalid, true); return; }
+    await mutation("/api/delivery/references", { project_id: projectId, url, expected_revision: state.project.intervention_revision }, "참고 자료 수집을 요청했습니다.", () => state.referenceDrafts.delete(projectId));
+  });
   function rememberConsentDraft() {
     if (!state.project) return;
     const prior = state.consentDrafts.get(state.project.id);
@@ -393,6 +606,8 @@
   $("intervention-form").addEventListener("submit", async (event) => { event.preventDefault(); if (!state.project) return; const note = $("intervention-note").value.trim(); if (!note) { message("상황과 확인 내용을 입력하세요.", true); return; } const body = { project_id: state.project.id, expected_revision: state.interventionRevision || state.project.intervention_revision, stage_id: $("stage-id").value, reason: $("intervention-reason").value, note, decision: $("intervention-decision").value.trim(), outcome: $("intervention-outcome").value.trim() }; if (await mutation("/api/delivery/intervention", body, "개입 기록 저장됨")) { state.interventionRevision = null; $("intervention-form").reset(); } });
   $("new-project").addEventListener("click", () => { if (state.pending || state.advancing) return; clearTimeout(state.timer); ++state.sequence; state.project = null; state.interventionRevision = null; $("intervention-form").reset(); message(""); renderProject(); $("client-request").focus(); });
   $("refresh-projects").addEventListener("click", refreshProjects); $("refresh-status").addEventListener("click", refreshStatus);
-  window.addEventListener("pagehide", () => clearTimeout(state.timer));
+  document.addEventListener("visibilitychange", () => { if (document.hidden) { stopConnectionPoll(); clearMcpToken(); } else scheduleConnectionPoll(); });
+  window.addEventListener("pagehide", () => { clearTimeout(state.timer); stopConnectionPoll(); ++state.connectionSequence; ++state.mcpSequence; state.mcpBusy = false; clearMcpToken(); });
+  window.addEventListener("pageshow", (event) => { if (event.persisted) refreshMcpConnection(); });
   renderProject(); Promise.allSettled([refreshStatus(), refreshProjects()]);
 })();
