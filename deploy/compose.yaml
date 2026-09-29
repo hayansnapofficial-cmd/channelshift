@@ -1,0 +1,68 @@
+name: channelshift-platform
+services:
+  members:
+    image: channelshift-members:0.2.1
+    network_mode: host
+    restart: unless-stopped
+    init: true
+    user: "1000:1000"
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    pids_limit: 256
+    mem_limit: 4g
+    cpus: 4
+    env_file: ./secrets/runtime.env
+    volumes:
+      - ./data:/data:Z
+      - ./secrets/gmail-app-password.txt:/run/channelshift/gmail-app-password.txt:ro,Z
+      - ./secrets/apify-token.txt:/run/channelshift/apify-token.txt:ro,Z
+    tmpfs:
+      - /tmp:rw,nosuid,nodev,mode=1777,size=256m
+    healthcheck:
+      test: [CMD, python, -c, "import urllib.request; r=urllib.request.Request('http://127.0.0.1:5189/health',headers={'Host':'channelshift.net'}); assert urllib.request.urlopen(r,timeout=5).status==200"]
+      interval: 30s
+      timeout: 6s
+      retries: 3
+    logging:
+      driver: json-file
+      options: {max-size: 10m, max-file: "3"}
+  proxy:
+    image: nginx:1.28-alpine@sha256:a8b39bd9cf0f83869a2162827a0caf6137ddf759d50a171451b335cecc87d236
+    network_mode: host
+    restart: unless-stopped
+    user: "1000:1000"
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    pids_limit: 64
+    mem_limit: 128m
+    entrypoint: [nginx, -g, "daemon off;"]
+    volumes:
+      - ./config/nginx.conf:/etc/nginx/nginx.conf:ro,Z
+    tmpfs:
+      - /tmp:rw,nosuid,nodev,mode=1777,size=32m
+    depends_on:
+      members: {condition: service_healthy}
+    logging:
+      driver: json-file
+      options: {max-size: 5m, max-file: "2"}
+  tunnel:
+    image: cloudflare/cloudflared:2026.9.3@sha256:072c067d25ccbe61d46e18f0d0723255f2bb5304f7317caa95b27031520ff92c
+    network_mode: host
+    restart: unless-stopped
+    user: "1000:1000"
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    pids_limit: 64
+    mem_limit: 256m
+    command: [tunnel, --no-autoupdate, run, --token-file, /run/channelshift/tunnel-token.txt]
+    volumes:
+      - ./secrets/cloudflare-tunnel-token.txt:/run/channelshift/tunnel-token.txt:ro,Z
+    depends_on:
+      members: {condition: service_healthy}
+      proxy: {condition: service_started}
+    logging:
+      driver: json-file
+      options: {max-size: 5m, max-file: "2"}

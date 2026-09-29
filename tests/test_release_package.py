@@ -8,6 +8,7 @@ import tempfile
 import unittest
 import warnings
 import zipfile
+from channelshift import __version__
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -18,7 +19,7 @@ spec.loader.exec_module(release)
 
 class ReleasePackageTests(unittest.TestCase):
     def test_project_and_runtime_versions_agree(self):
-        self.assertEqual(release.read_version(), "0.2.0")
+        self.assertEqual(release.read_version(), __version__)
 
     def test_version_comes_from_project_metadata_and_mismatch_fails(self):
         with tempfile.TemporaryDirectory() as folder:

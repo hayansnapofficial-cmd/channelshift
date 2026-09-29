@@ -119,6 +119,17 @@ class _Links(HTMLParser):
         self.footer_markers = 0
         self.feed(content)
 
+    def parse_html_declaration(self, index):
+        # Python versions differ: marked declarations may raise or silently
+        # become bogus comments. Reject the same token at the parser boundary,
+        # without rejecting literal examples inside scripts or real comments.
+        if self.rawdata.startswith("<![", index):
+            raise ValueError("invalid_html_declaration")
+        return super().parse_html_declaration(index)
+
+    def unknown_decl(self, data):
+        raise ValueError("invalid_html_declaration")
+
     def handle_starttag(self, tag, attrs):
         if tag == "a":
             self.links.update(value for key, value in attrs if key == "href" and value is not None)
