@@ -1,7 +1,9 @@
 param([string]$InstallDirectory = (Join-Path $env:LOCALAPPDATA 'Programs\ChannelShift Independent'))
 $ErrorActionPreference = 'Stop'
 $repository = Split-Path -Parent $PSScriptRoot
-$wheelPath = Join-Path $repository 'release\channelshift-0.1.0-py3-none-any.whl'
+$releaseVersion = & python -B (Join-Path $PSScriptRoot 'build-release.py') --version
+if ($LASTEXITCODE -ne 0 -or $releaseVersion -notmatch '^\d+\.\d+\.\d+(?:(?:a|b|rc)\d+)?(?:\.post\d+)?$') { throw 'Package version could not be verified.' }
+$wheelPath = Join-Path $repository ("release\channelshift-{0}-py3-none-any.whl" -f $releaseVersion)
 if (!(Test-Path -LiteralPath $wheelPath -PathType Leaf)) { throw 'Build the release first or install the published wheel manually.' }
 $destination = [IO.Path]::GetFullPath($InstallDirectory)
 $environmentPath = Join-Path $destination 'venv'
@@ -27,7 +29,7 @@ foreach ($shortcutFolder in $shortcutFolders) {
     $shortcut.Save()
 }
 @{
-    version = '0.1.0'
+    version = $releaseVersion
     package_sha256 = (Get-FileHash -LiteralPath $wheelPath -Algorithm SHA256).Hash.ToLowerInvariant()
     installed_utc = (Get-Date).ToUniversalTime().ToString('o')
     studio_url = 'http://127.0.0.1:5187/'

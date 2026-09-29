@@ -21,7 +21,7 @@ import subprocess
 import threading
 import time
 
-from . import codex_intake
+from . import __version__, codex_intake
 from .member_auth import AuthError, _reject_links
 
 LOGIN_TIMEOUT = 10 * 60
@@ -324,7 +324,7 @@ class MemberCodex:
         success = False
         try:
             server = _AppServer(item.home, item.cancel)
-            server.request("initialize", {"clientInfo": {"name": "channelshift_members", "version": "0.1.0"}})
+            server.request("initialize", {"clientInfo": {"name": "channelshift_members", "version": __version__}})
             server.send({"method": "initialized", "params": {}})
             result = server.request("account/login/start", {"type": "chatgptDeviceCode"})
             if (result.get("type") != "chatgptDeviceCode"

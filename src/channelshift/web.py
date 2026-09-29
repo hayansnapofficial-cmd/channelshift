@@ -4,11 +4,13 @@ from __future__ import annotations
 import argparse
 import hmac
 import json
+import re
 import secrets
 import sys
 import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
+from urllib.parse import urlsplit
 
 from . import __version__
 from .core import create_schema, export_java, export_sql, list_templates, validate_schema
@@ -50,7 +52,30 @@ def error_code(error):
     return str(error) if type(error) is ValueError and str(error) in allowed | ERRORS else "operation_failed"
 
 
-def handler_factory(store=None, token=None, delivery=None, pipeline=None):
+def normalize_public_origin(value):
+    """Validate operator configuration, never forwarded or client headers."""
+    if (type(value) is not str or not value.isascii() or not value.startswith('https://')
+            or any(ord(char) <= 32 or ord(char) == 127 for char in value)
+            or any(char in value for char in ('\\', '?', '#'))):
+        raise ValueError('invalid_public_origin')
+    try:
+        parsed = urlsplit(value)
+        host = parsed.hostname
+        port = parsed.port
+        if (not host or parsed.username is not None or parsed.password is not None
+                or parsed.path not in ('', '/') or len(host) > 253
+                or any(not re.fullmatch(r'[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?', label)
+                       for label in host.split('.'))
+                or (port is not None and not 1 <= port <= 65535)
+                or parsed.netloc.lower() != host + (':' + str(port) if port is not None else '')):
+            raise ValueError()
+        return 'https://' + host + (':' + str(port) if port not in (None, 443) else '')
+    except (TypeError, ValueError):
+        raise ValueError('invalid_public_origin') from None
+
+
+def handler_factory(store=None, token=None, delivery=None, pipeline=None, *, public_origin=None):
+    configured_origin = normalize_public_origin(public_origin) if public_origin is not None else None
     projects = store or ProjectStore()
     token = token or secrets.token_urlsafe(32)
     delivery_lock = threading.Lock()
@@ -82,7 +107,7 @@ def handler_factory(store=None, token=None, delivery=None, pipeline=None):
 
         @property
         def origin(self):
-            return "http://127.0.0.1:" + str(self.server.server_port)
+            return configured_origin or "http://127.0.0.1:" + str(self.server.server_port)
 
         def send(self, status, data, mime="application/json; charset=utf-8"):
             payload = data if isinstance(data, bytes) else json.dumps(data, ensure_ascii=False, allow_nan=False).encode("utf-8")
@@ -92,6 +117,8 @@ def handler_factory(store=None, token=None, delivery=None, pipeline=None):
             self.send_header("Cache-Control", "no-store")
             self.send_header("X-Content-Type-Options", "nosniff")
             self.send_header("Referrer-Policy", "no-referrer")
+            if configured_origin:
+                self.send_header('Strict-Transport-Security', 'max-age=31536000')
             if self.path.startswith('/studio-preview/'):
                 self.send_header('Content-Security-Policy', "sandbox; default-src 'none'; style-src 'unsafe-inline'; img-src data:; form-action 'none'; frame-ancestors 'self'; base-uri 'none'")
             else:
@@ -103,11 +130,15 @@ def handler_factory(store=None, token=None, delivery=None, pipeline=None):
                 self.wfile.write(payload)
 
         def guard(self, api=False, write=False):
-            if self.headers.get("Host") != self.origin.removeprefix("http://"):
+            # A local TLS proxy must preserve Host and Origin. Forwarded headers
+            # are never used as authority, including on loopback connections.
+            if (len(self.headers.get_all('Host', [])) != 1
+                    or self.headers.get("Host") != urlsplit(self.origin).netloc):
                 self.send(403, {"ok": False, "error": "invalid_host"})
                 return False
             origin = self.headers.get("Origin")
-            if (write and origin != self.origin) or (origin is not None and origin != self.origin):
+            if (len(self.headers.get_all('Origin', [])) > 1
+                    or (write and origin != self.origin) or (origin is not None and origin != self.origin)):
                 self.send(403, {"ok": False, "error": "invalid_origin"})
                 return False
             supplied = self.headers.get("X-ChannelShift-Token", "")

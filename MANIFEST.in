@@ -6,3 +6,10 @@ recursive-include tests *.py *.cjs
 recursive-include src/channelshift/web *.html *.js *.css
 global-exclude *.pyc
 global-exclude __pycache__
+global-exclude .env .env.* *.key *.pem *.p12 *.pfx *.dpapi
+global-exclude *.sqlite *.sqlite-* *.sqlite3 *.sqlite3-* *.db *.db-* *.log
+prune .channelshift
+prune .codex
+prune .venv
+prune release
+prune dist

@@ -6,7 +6,7 @@ ChannelShift is a member-scoped website production workspace, independent schema
 
 ## 새 제작 작업실
 
-회원 서버 실행: `powershell -File scripts/start-members.ps1`. [작업실](http://127.0.0.1:5189/delivery)에서 로그인하고 **내 계정 → 내 Codex 연결**을 설정합니다.
+v0.2.0 회원 서버 실행: `channelshift-members --port 5189` 또는 저장소의 `powershell -File scripts/start-members.ps1`. [작업실](http://127.0.0.1:5189/delivery)에서 로그인하고 **내 계정 → 내 Codex 연결**을 설정합니다. 공개 HTTPS 구성은 [서버 배포 안내](docs/DEPLOYMENT.md)를 따릅니다.
 
 1. 새 프로젝트에 고객 원문을 넣고 **내 Codex로 정리**를 누릅니다.
 2. 질문에 답하고 **답변 저장하고 다시 정리**한 뒤 요구사양을 확정합니다.
@@ -16,7 +16,7 @@ ChannelShift is a member-scoped website production workspace, independent schema
 
 이 작업실의 첫 출력 형식은 Python 표준 라이브러리 + SQLite + HTML/CSS/JavaScript입니다. DB 생성문은 실제 메모리 DB에서 검사하지만 생성한 앱의 실행·보안 인수 검사·공개 배포는 별도로 해야 합니다. 필수 항목의 작성 완료는 법률 검토 완료를 의미하지 않습니다. 자세한 범위는 [재구축 구조](docs/STUDIO_REBUILD.md), [필수 운영 정보](docs/SITE_OBLIGATIONS.md)를 확인하세요.
 
-기존 회원 프로젝트는 원문·답변·설계 이력을 보존해 새 작업실에서 열립니다. 변경된 상위 산출물에 의존하는 후속 검수는 다시 필요합니다. DB 단독 편집기는 `/editor`에 있습니다. 아래의 v0.1.0 배포 안내와 전체 운영 공정 설계는 새 작업실의 완료 범위와 구분합니다.
+기존 회원 프로젝트는 원문·답변·설계 이력을 보존해 새 작업실에서 열립니다. 변경된 상위 산출물에 의존하는 후속 검수는 다시 필요합니다. DB 단독 편집기는 `/editor`에 있습니다. [v0.2.0 배포 범위](docs/RELEASE_0_2_0.md)와 후속 운영 공정 설계를 구분합니다.
 
 ## 무엇을 만들 수 있나요?
 
@@ -99,7 +99,7 @@ codex mcp add channelshift -- "C:\absolute\path\.venv\Scripts\channelshift-mcp.e
 
 ## 스킬과 사용법
 
-[스킬](skills/channelshift/SKILL.md)을 `~/.codex/skills/channelshift`에 설치합니다. 릴리스의 `channelshift-skill-0.1.0.zip`은 이 폴더 구조와 독립 패키지 wheel을 포함합니다. 기존 스킬을 보관한 뒤 설치하고 새 Codex 작업에서 사용하세요. ZIP 안의 `scripts/install.py`는 패키지를 별도 가상환경에 설치하며 MCP 경로를 출력합니다.
+[스킬](skills/channelshift/SKILL.md)을 `~/.codex/skills/channelshift`에 설치합니다. 릴리스의 `channelshift-skill-0.2.0.zip`은 이 폴더 구조와 독립 패키지 wheel을 포함합니다. 기존 스킬을 보관한 뒤 설치하고 새 Codex 작업에서 사용하세요. ZIP 안의 `scripts/install.py`는 패키지를 별도 가상환경에 설치하며 MCP 경로를 출력합니다.
 
 요청 예시:
 
@@ -148,7 +148,7 @@ Node는 선택적인 JavaScript 문법 검사에만 사용합니다. 실행에�
 
 [프로젝트 목록 계약](docs/PROJECT_CATALOG.md)과 [인프라·납품 계약](docs/INFRASTRUCTURE_DELIVERY.md)은 프로젝트별 작업 경계, SEO·OG·DNS/TLS, 소유권·백업·비밀값 인계·임시 접근 회수·고객 인수의 완료 기준을 다룹니다. 예시 결과나 계획을 실제 고객 프로젝트의 검사·납품 완료로 간주하지 않습니다.
 
-현재 개발 변경에는 B0 기반인 공정 프로필, 읽기 전용 `delivery-plan` CLI, 입력 증거를 판정하는 순수 Gate 계산이 포함됩니다. **기존 v0.1.0 배포물의 기능이 아닙니다.** 이 코드를 포함한 소스에서 `python -m channelshift delivery-plan` 또는 `python -m channelshift delivery-plan --input brief.json`으로 접수 상태와 계획을 조회합니다. 고객 원문이 없으면 후속 계획의 시작 조건을 충족하지 않습니다. 자연어 모델 호출·작업 실행·승인 발급·배포를 수행하지 않으며, 입력을 채우거나 계산이 통과해도 실제 검수·납품 완료를 뜻하지 않습니다.
+v0.2.0에는 B0 기반인 공정 프로필, 읽기 전용 `delivery-plan` CLI, 입력 증거를 판정하는 순수 Gate 계산이 포함됩니다. `python -m channelshift delivery-plan` 또는 `python -m channelshift delivery-plan --input brief.json`으로 접수 상태와 계획을 조회합니다. 고객 원문이 없으면 후속 계획의 시작 조건을 충족하지 않습니다. 이 읽기 전용 CLI는 자연어 모델 호출·작업 실행·승인 발급·배포를 수행하지 않으며, 입력을 채우거나 계산이 통과해도 실제 검수·납품 완료를 뜻하지 않습니다.
 
 개발 브랜치에는 별도로 [요구사항 접수 화면](docs/INTAKE_PILOT.md)을 구현했습니다. 로컬 서버의 `/delivery`에서 **고객 원문 등록 → 본인 Codex로 후보·질문 작성 → 선택적인 Jev 근거 검토 → 사람 개입 사유 기록**을 실행할 수 있습니다. 원문·이전 결과·개입 사유는 로컬 SQLite에 보존합니다. 실제 Codex 구독 호출과 Jev API를 합성 자료로 확인했으며, 아직 전체 홈페이지를 자동 완성하는 기능은 아닙니다.
 
@@ -156,7 +156,7 @@ Node는 선택적인 JavaScript 문법 검사에만 사용합니다. 실행에�
 
 검수 화면의 **ERD 초안 만들기**는 저장한 원문·요구사항·답변을 본인 Codex에 전달해 테이블·필드·관계와 요구사항 연결 근거를 작성합니다. **ERD·DB 편집 열기**에서 이어서 수정하고 같은 접수 프로젝트에 저장하며 SQL·Java를 내보낼 수 있습니다. 요구사항 근거가 바뀌면 이전 초안은 재검토 대상으로 남고, 수동 편집 후에는 생성 당시 요구사항 연결을 다시 확인해야 합니다. 이 단계는 설계 초안이며 와이어프레임 승인·설계 검수 통과·실제 DB 구축을 뜻하지 않습니다.
 
-개발 브랜치의 [회원 모드](docs/MEMBER_AUTH.md)는 `python -m channelshift.member_web --port 5189`로 별도 실행합니다. 아이디·비밀번호·이메일 가입, 일회성 이메일 인증, 로그인·로그아웃과 회원별 접수·설계 저장소를 제공합니다. SMTP 연결 전에는 가입을 차단하며 브라우저 Gmail 로그인 정보를 가져오지 않습니다. 직원·고객·마케팅 업체는 일반 회원으로 가입하고, 기존 운영자의 프로젝트·Codex·Jev 자격증명을 물려받지 않습니다. 회원은 요구사항 화면에서 본인 Codex를 기기 인증으로 연결할 수 있고, 요구사항 검토·참고 자료 수집은 서버 공용 API를 사용합니다. 팀 초대·비밀번호 복구·공개 HTTPS 운영은 아직 구현하지 않았습니다.
+v0.2.0의 [회원 모드](docs/MEMBER_AUTH.md)는 `python -m channelshift.member_web --port 5189`로 별도 실행합니다. 아이디·비밀번호·이메일 가입, 일회성 이메일 인증, 로그인·로그아웃과 회원별 접수·설계 저장소를 제공합니다. SMTP 연결 전에는 가입을 차단하며 브라우저 Gmail 로그인 정보를 가져오지 않습니다. 직원·고객·마케팅 업체는 일반 회원으로 가입하고, 기존 운영자의 프로젝트·Codex·Jev 자격증명을 물려받지 않습니다. 회원은 내 계정 화면에서 본인 Codex를 기기 인증으로 연결할 수 있고, 요구사항 검토·참고 자료 수집은 서버 공용 API를 사용합니다. 고정 HTTPS origin과 보안 쿠키를 지원하며 실제 서버 연결·메일·회원 인증은 배포 환경에서 검수해야 합니다. 팀 초대·비밀번호 복구는 후속 기능입니다.
 
 로컬 운영자가 별도 초기 설정으로 생성한 마스터 계정은 일반 작업 공간과 `/admin` 회원 관리를 함께 사용합니다. 회원 목록·이메일 인증 상태·이용 정지와 복원·관리 변경 이력을 제공하고, 공개 가입이나 요청 필드로 관리자 권한을 얻을 수 없습니다. 마스터 초기 설정을 이메일 인증 완료로 표시하지 않으며, 다른 회원의 프로젝트 본문을 관리자 화면에서 열람하는 기능은 제공하지 않습니다.
 

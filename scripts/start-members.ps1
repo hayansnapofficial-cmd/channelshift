@@ -1,5 +1,5 @@
 [CmdletBinding()]
-param([string]$Python, [ValidateRange(1024, 65535)][int]$Port = 5189)
+param([string]$Python, [ValidateRange(1024, 65535)][int]$Port = 5189, [string]$PublicOrigin)
 
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
@@ -92,9 +92,9 @@ if (Test-Path -LiteralPath $configFile) {
     $newEnvironment.CHANNELSHIFT_SMTP_USER = $settings.username
     $newEnvironment.CHANNELSHIFT_SMTP_PASSWORD_FILE = $passwordFile
     $newEnvironment.CHANNELSHIFT_SMTP_MODE = 'starttls'
-    Write-Host 'Starting localhost member mode with private SMTP settings. Delivery has not been tested.'
+    Write-Host 'Starting member mode with private SMTP settings. Email delivery has not been tested.'
 } else {
-    Write-Host 'Starting localhost member mode without email configuration. Registration remains unavailable.'
+    Write-Host 'Starting member mode without email configuration. Registration remains unavailable.'
 }
 
 $previousEnvironment = @{}
@@ -103,7 +103,11 @@ try {
         $previousEnvironment[$name] = [System.Environment]::GetEnvironmentVariable($name, 'Process')
         [System.Environment]::SetEnvironmentVariable($name, $newEnvironment[$name], 'Process')
     }
-    & $Python -B -m channelshift.member_web --port $Port
+    $memberArguments = @('-B', '-m', 'channelshift.member_web', '--port', [string]$Port)
+    if (-not [string]::IsNullOrWhiteSpace($PublicOrigin)) {
+        $memberArguments += @('--public-origin', $PublicOrigin)
+    }
+    & $Python @memberArguments
     if ($LASTEXITCODE -ne 0) { throw 'The member server stopped with an error.' }
 } finally {
     foreach ($name in $previousEnvironment.Keys) {

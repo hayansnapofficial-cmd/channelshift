@@ -1,6 +1,6 @@
-"""Loopback membership pilot with verified accounts and isolated workspaces.
+"""Loopback member service, optionally behind a local HTTPS reverse proxy.
 
-This is not a public hosting server. Legacy single-operator data is untouched.
+An explicit public origin is required for HTTPS deployment. Legacy data is untouched.
 Codex identities are per member. Shared service credentials remain server-side.
 """
 from __future__ import annotations
@@ -19,7 +19,7 @@ from pathlib import Path
 from .delivery_profile import standard_site_profile
 from .delivery_workspace import DeliveryWorkspace
 from .store import ProjectStore, directory
-from .web import WEB, handler_factory
+from .web import WEB, handler_factory, normalize_public_origin
 
 AUTH_ASSETS = {'/login': ('login.html', 'text/html; charset=utf-8'),
                '/login.js': ('login.js', 'text/javascript; charset=utf-8'),
@@ -42,14 +42,15 @@ AUTH_ERRORS = {'invalid_member_input': 400, 'invalid_input': 400, 'invalid_usern
                'member_not_found': 404, 'invalid_admin_request': 400}
 
 
-def member_handler_factory(auth, root, token=None, *, codex=None, services=None):
+def member_handler_factory(auth, root, token=None, *, codex=None, services=None, public_origin=None):
     from .member_codex import MemberCodex
     from .shared_services import SharedServices, ServiceError
+    public_origin = normalize_public_origin(public_origin) if public_origin is not None else None
     root = Path(root)
     codex = codex if codex is not None else MemberCodex(root)
     services = services if services is not None else SharedServices(root / 'shared-services.sqlite3')
     token = token or secrets.token_urlsafe(32)
-    base = handler_factory(token=token)
+    base = handler_factory(token=token, public_origin=public_origin)
     members = {}
     workspaces = {}
     pipelines = {}
@@ -102,7 +103,8 @@ def member_handler_factory(auth, root, token=None, *, codex=None, services=None)
                 pipeline = PipelineWorkspace(delivery, member_root / 'pipeline.sqlite3',
                     generate=lambda stage, spec, dependencies: generate_stage_for(user_id, stage, spec, dependencies))
                 pipelines[user_id] = pipeline
-                members[user_id] = handler_factory(ProjectStore(member_root / 'schemas'), token, delivery, pipeline)
+                members[user_id] = handler_factory(ProjectStore(member_root / 'schemas'), token, delivery, pipeline,
+                                                  public_origin=public_origin)
             return members[user_id]
 
     class MemberHandler(base):
@@ -126,7 +128,7 @@ def member_handler_factory(auth, root, token=None, *, codex=None, services=None)
 
         @property
         def cookie_name(self):
-            return 'channelshift_member_' + str(self.server.server_port)
+            return '__Host-channelshift_member' if public_origin else 'channelshift_member_' + str(self.server.server_port)
 
         def session_token(self):
             raw = self.headers.get('Cookie', '')
@@ -140,13 +142,14 @@ def member_handler_factory(auth, root, token=None, *, codex=None, services=None)
                 return ''
 
         def set_session_cookie(self, value, age=28800):
-            # Local-only HTTP preview. Production requires TLS and Secure cookies.
             cookie = SimpleCookie()
             cookie[self.cookie_name] = value
             cookie[self.cookie_name]['path'] = '/'
             cookie[self.cookie_name]['httponly'] = True
             cookie[self.cookie_name]['samesite'] = 'Strict'
             cookie[self.cookie_name]['max-age'] = age
+            if public_origin:
+                cookie[self.cookie_name]['secure'] = True
             self.pending_cookie = cookie.output(header='').strip()
 
         def session_user(self):
@@ -201,7 +204,7 @@ def member_handler_factory(auth, root, token=None, *, codex=None, services=None)
                                 'user': user})
                 return
             if self.path == '/health':
-                self.send(200, {'ok': True, 'service': 'channelshift-members-local'})
+                self.send(200, {'ok': True, 'service': 'channelshift-members' if public_origin else 'channelshift-members-local'})
                 return
             user = self.authenticated_user()
             if not user:
@@ -514,13 +517,19 @@ def main():
     from .member_mail import from_environment
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--port', type=int, default=5189)
+    parser.add_argument('--public-origin', default=os.environ.get('CHANNELSHIFT_PUBLIC_ORIGIN'),
+                        help='Exact HTTPS origin served by the local reverse proxy')
     args = parser.parse_args()
     if not 1024 <= args.port <= 65535:
         parser.error('Port must be between 1024 and 65535')
+    try:
+        public_origin = normalize_public_origin(args.public_origin) if args.public_origin is not None else None
+    except ValueError:
+        parser.error('Public origin must be an HTTPS origin without credentials, path, query or fragment')
     root = directory() / 'members'
-    origin = 'http://127.0.0.1:' + str(args.port)
+    origin = public_origin or 'http://127.0.0.1:' + str(args.port)
     auth = MemberAuth(root / 'accounts.sqlite3', mailer=from_environment(origin))
-    handler = member_handler_factory(auth, root)
+    handler = member_handler_factory(auth, root, public_origin=public_origin)
     with ThreadingHTTPServer(('127.0.0.1', args.port), handler) as server:
         print('ChannelShift members: ' + origin + '/login', file=sys.stderr)
         try:
