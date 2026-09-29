@@ -475,6 +475,18 @@ class MemberCodex:
                 raise MemberCodexError("codex_authentication_required")
             return generate_erd(review_snapshot, database, codex_home=home)
 
+    def generate_stage(self, user_id, stage, confirmed_spec, dependency_artifacts):
+        from .codex_pipeline import generate_stage
+        with self._user_lock(user_id):
+            home = self._home(user_id)
+            with self.lock:
+                item = self.connections.get(user_id)
+                if self.closed or (item and not item.done.is_set()):
+                    raise MemberCodexError("codex_connection_busy")
+            if not (home / "auth.json").exists():
+                raise MemberCodexError("codex_authentication_required")
+            return generate_stage(stage, confirmed_spec, dependency_artifacts, codex_home=home)
+
     def close(self):
         with self.lock:
             self.closed = True

@@ -29,6 +29,7 @@ SAFE_ERROR_CODES = frozenset({
     "codex_timeout", "codex_output_limit", "codex_stop_failed", "codex_invalid_output",
     "codex_rate_limited", "codex_execution_failed",
     "invalid_erd_input", "codex_invalid_erd_output",
+    "invalid_pipeline_input", "codex_invalid_pipeline_output",
 })
 _EXECUTION_LOCK = threading.Lock()
 _ENV_ALLOW = {

@@ -52,6 +52,7 @@ def member_handler_factory(auth, root, token=None, *, codex=None, services=None)
     base = handler_factory(token=token)
     members = {}
     workspaces = {}
+    pipelines = {}
     members_lock = threading.Lock()
 
     def ensure_active(user_id):
@@ -65,6 +66,10 @@ def member_handler_factory(auth, root, token=None, *, codex=None, services=None)
     def generate_erd_for(user_id, snapshot, database):
         ensure_active(user_id)
         return codex.generate_erd(user_id, snapshot, database)
+
+    def generate_stage_for(user_id, stage, spec, dependencies):
+        ensure_active(user_id)
+        return codex.generate_stage(user_id, stage, spec, dependencies)
 
     def review_for(user_id, source, requirements):
         ensure_active(user_id)
@@ -93,7 +98,11 @@ def member_handler_factory(auth, root, token=None, *, codex=None, services=None)
                     collect=lambda url: collect_for(user_id, url),
                     generate_erd=lambda snapshot, database: generate_erd_for(user_id, snapshot, database))
                 workspaces[user_id] = delivery
-                members[user_id] = handler_factory(ProjectStore(member_root / 'schemas'), token, delivery)
+                from .pipeline_workspace import PipelineWorkspace
+                pipeline = PipelineWorkspace(delivery, member_root / 'pipeline.sqlite3',
+                    generate=lambda stage, spec, dependencies: generate_stage_for(user_id, stage, spec, dependencies))
+                pipelines[user_id] = pipeline
+                members[user_id] = handler_factory(ProjectStore(member_root / 'schemas'), token, delivery, pipeline)
             return members[user_id]
 
     class MemberHandler(base):
@@ -102,9 +111,11 @@ def member_handler_factory(auth, root, token=None, *, codex=None, services=None)
 
         @staticmethod
         def close_resources():
-            codex.close()
+            for pipeline in pipelines.values():
+                pipeline.close()
             for workspace in workspaces.values():
                 workspace.close()
+            codex.close()
 
         def end_headers(self):
             if self.pending_cookie:
@@ -237,14 +248,20 @@ def member_handler_factory(auth, root, token=None, *, codex=None, services=None)
                     self.connection_error(error)
                 return
             asset_path = self.path.split('?', 1)[0]
-            if asset_path in {'/', '/delivery', '/workbench'}:
-                name = {'/': 'index.html', '/delivery': 'delivery.html', '/workbench': 'workbench.html'}[asset_path]
+            if asset_path in {'/', '/delivery', '/studio', '/editor', '/workbench'}:
+                name = {'/': 'studio.html', '/delivery': 'studio.html', '/studio': 'studio.html',
+                        '/editor': 'index.html', '/workbench': 'workbench.html'}[asset_path]
+                if asset_path == '/' and self.path.startswith('/?delivery='):
+                    name = 'index.html'
                 payload = (WEB / name).read_text(encoding='utf-8')
                 payload = payload.replace('__CHANNELSHIFT_TOKEN__', token)
                 navigation = '<a class="text-button" href="/login">내 계정</a>'
                 if user.get('role') == 'master':
                     navigation += '<a class="text-button" href="/admin">관리자</a>'
-                payload = payload.replace('</header>', navigation + '</header>', 1)
+                if name != 'studio.html':
+                    payload = payload.replace('</header>', navigation + '</header>', 1)
+                elif user.get('role') == 'master':
+                    payload = payload.replace('<button id="logout"', '<a class="text-button" href="/admin">회원 관리</a><button id="logout"', 1)
                 self.send(200, payload.encode('utf-8'), 'text/html; charset=utf-8')
                 return
             try:

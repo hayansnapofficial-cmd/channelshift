@@ -1,8 +1,22 @@
 # ChannelShift · 채널쉬프트
 
-웹사이트와 프로그램 개발을 시작하는 **DB 템플릿 생성 도구**입니다. 독립적인 데이터 모델을 중심으로 템플릿, SQL·Java 출력, MCP, 시각 편집기를 분리했습니다.
+고객의 자연어 요구를 **질문·답변 → 요구사양 → 화면 설계 → ERD·API → DB → 백엔드 → 프론트 → 검수 파일**로 연결하는 제작 작업실입니다. 회원별 Codex 연결과 단계별 검수 기록을 사용하며, DB 템플릿·MCP·스킬도 제공합니다.
 
-ChannelShift is an independent database starter generator, local schema editor and stdio MCP server for website and application development. It generates files; it does not execute SQL or connect to a live database.
+ChannelShift is a member-scoped website production workspace, independent schema editor and stdio MCP server. It generates reviewable source bundles and verifies deterministic DDL in an isolated in-memory SQLite database. Generated applications and production deployments are not executed by the workspace.
+
+## 새 제작 작업실
+
+회원 서버 실행: `powershell -File scripts/start-members.ps1`. [작업실](http://127.0.0.1:5189/delivery)에서 로그인하고 **내 계정 → 내 Codex 연결**을 설정합니다.
+
+1. 새 프로젝트에 고객 원문을 넣고 **내 Codex로 정리**를 누릅니다.
+2. 질문에 답하고 **답변 저장하고 다시 정리**한 뒤 요구사양을 확정합니다.
+3. 화면 설계 → ERD → API → SQLite → 백엔드 → 프론트를 생성하고, 결과를 확인한 이유를 남겨 다음 단계로 진행합니다. 코드 파일과 ERD는 직접 수정할 수 있습니다.
+4. **운영·정책**의 사업자정보, 개인정보처리방침, 통신판매업정보, 고객문의, 호스팅사, 이용약관, 취소/환불 규정을 입력합니다. 판매·서비스·SaaS 모두 일곱 항목이 있어야 납품 파일을 만들 수 있습니다.
+5. 검수 자료를 확인하고 소스·DB 생성문·정책 페이지·실행 안내를 ZIP으로 내려받습니다.
+
+이 작업실의 첫 출력 형식은 Python 표준 라이브러리 + SQLite + HTML/CSS/JavaScript입니다. DB 생성문은 실제 메모리 DB에서 검사하지만 생성한 앱의 실행·보안 인수 검사·공개 배포는 별도로 해야 합니다. 필수 항목의 작성 완료는 법률 검토 완료를 의미하지 않습니다. 자세한 범위는 [재구축 구조](docs/STUDIO_REBUILD.md), [필수 운영 정보](docs/SITE_OBLIGATIONS.md)를 확인하세요.
+
+기존 회원 프로젝트는 원문·답변·설계 이력을 보존해 새 작업실에서 열립니다. 변경된 상위 산출물에 의존하는 후속 검수는 다시 필요합니다. DB 단독 편집기는 `/editor`에 있습니다. 아래의 v0.1.0 배포 안내와 전체 운영 공정 설계는 새 작업실의 완료 범위와 구분합니다.
 
 ## 무엇을 만들 수 있나요?
 
@@ -41,7 +55,7 @@ python -m venv .venv
 .venv/bin/python -m channelshift.web
 ```
 
-편집기는 [로컬 ChannelShift](http://127.0.0.1:5187/)에서 열립니다. 서버를 전경 실행했다면 Ctrl+C로 종료합니다. [릴리스](https://github.com/hayansnapofficial-cmd/channelshift/releases)에서 wheel을 받아 `python -m pip install <wheel 파일>`로 설치해도 됩니다. Windows 저장소 설치 도우미는 릴리스를 빌드한 후 `scripts/install-windows.ps1`로 실행하며 기존 가상환경·바로가기를 덮어쓰지 않습니다.
+작업실은 [로컬 ChannelShift](http://127.0.0.1:5187/)에서, DB 단독 편집기는 `/editor`에서 열립니다. 서버를 전경 실행했다면 Ctrl+C로 종료합니다. [릴리스](https://github.com/hayansnapofficial-cmd/channelshift/releases)에서 wheel을 받아 `python -m pip install <wheel 파일>`로 설치해도 됩니다. Windows 저장소 설치 도우미는 릴리스를 빌드한 후 `scripts/install-windows.ps1`로 실행하며 기존 가상환경·바로가기를 덮어쓰지 않습니다.
 
 ## MCP 연결
 
@@ -81,7 +95,7 @@ codex mcp add channelshift -- "C:\absolute\path\.venv\Scripts\channelshift-mcp.e
 
 편집기와 MCP의 기본 저장 폴더는 `~/.channelshift`입니다. `CHANNELSHIFT_HOME`을 바꾼다면 양쪽에 같은 값을 지정하세요. MCP 저장 결과는 편집기의 **저장한 버전 → 새로고침**에서 확인합니다. 현재 편집은 자동으로 바뀌지 않습니다. 설계·키·개인 환경 설정은 배포물에 포함하지 않습니다.
 
-회원 공용 기능은 `/delivery`의 **MCP 연결**에서 발급한 회원 연결 키를 사용합니다. `CHANNELSHIFT_SERVICE_URL`에는 서비스 주소를, `CHANNELSHIFT_SERVICE_TOKEN_FILE`에는 비공개 키 파일 경로를 지정합니다. 키는 30일 후 만료되며 재발급·해제로 철회할 수 있습니다. 공급자 API 키는 서버에서만 관리합니다. 자연어 처리와 제작은 MCP를 호출하는 사용자의 AI가 담당하므로 웹 프로그램의 Codex 연결 없이 공용 도구를 호출할 수 있습니다. 현재 회원 서버는 로컬 파일럿이며 공개 HTTPS 서비스는 아직 배포하지 않았습니다. [회원 서버와 연결 안내](docs/MEMBER_AUTH.md).
+회원 공용 기능은 작업실 **내 계정 → MCP 연결**에서 발급한 회원 연결 키를 사용합니다. `CHANNELSHIFT_SERVICE_URL`에는 서비스 주소를, `CHANNELSHIFT_SERVICE_TOKEN_FILE`에는 비공개 키 파일 경로를 지정합니다. 키는 30일 후 만료되며 재발급·해제로 철회할 수 있습니다. 공급자 API 키는 서버에서만 관리합니다. 자연어 처리와 제작은 MCP를 호출하는 사용자의 AI가 담당하므로 웹 프로그램의 Codex 연결 없이 공용 도구를 호출할 수 있습니다. 현재 회원 서버는 로컬 파일럿이며 공개 HTTPS 서비스는 아직 배포하지 않았습니다. [회원 서버와 연결 안내](docs/MEMBER_AUTH.md).
 
 ## 스킬과 사용법
 
@@ -122,11 +136,11 @@ python scripts/build-release.py
 
 Node는 선택적인 JavaScript 문법 검사에만 사용합니다. 실행에는 필요 없습니다. 검사 결과와 한계는 [릴리스 기록](docs/RELEASE.md)을 따릅니다. 공개 웹사이트 배포나 `channelshift.net` 연결은 이 릴리스에 포함하지 않습니다.
 
-## 다음 단계의 설계
+## 전체 운영 공정의 설계와 남은 범위
 
 다음 제품 목표는 **신입직원이 고객 요구사항 원문을 자연어로 접수하고, 프로그램에 연결한 본인 Codex 구독으로 홈페이지를 제작·검수·납품하는 것**입니다. 고객 원문 접수 → 프로젝트·환경 점검 → 정식 요구사항 확정을 먼저 진행합니다. 회사 소개·포트폴리오·문의·관리자 기능은 적합성을 확인할 파일럿 프로필이며 고객 요청을 템플릿에 강제로 맞추지 않습니다. 현재 실제 고객 요구사항은 접수되지 않았고 합성 예시는 검사에만 사용합니다.
 
-[납품 공정](docs/DELIVERY_PIPELINE.md)은 요구사항 확인 뒤 **시스템 설계**와 **디자인 후보·미리보기·승인**을 진행하고, 세 계약의 정합성 검수 후 DB → 백엔드 → 프론트 → 통합검수 → 배포·인계로 이어집니다. [디자인 후보 계약](docs/DESIGN_CANDIDATES.md)은 제작 방식과 관계없이 승인된 버전을 구현 기준으로 삼습니다. [Codex 연결 설계](docs/CODEX_CONNECTION.md)는 직원 PC의 본인 계정과 이용 한도를, [회원 플랫폼](docs/MEMBER_PLATFORM.md)은 별도의 회원 신원·프로젝트 소유권·선택한 산출물 저장을 다룹니다. 전체 제작 실행기·디자인 스튜디오·강제 검수 서버·공개 회원 서비스는 후속 구현입니다.
+[납품 공정](docs/DELIVERY_PIPELINE.md)은 요구사항 확인 뒤 **시스템 설계**와 **디자인 후보·미리보기·승인**을 진행하고, 세 계약의 정합성 검수 후 DB → 백엔드 → 프론트 → 통합검수 → 배포·인계로 이어집니다. [디자인 후보 계약](docs/DESIGN_CANDIDATES.md)은 제작 방식과 관계없이 승인된 버전을 구현 기준으로 삼습니다. [Codex 연결 설계](docs/CODEX_CONNECTION.md)는 직원 PC의 본인 계정과 이용 한도를, [회원 플랫폼](docs/MEMBER_PLATFORM.md)은 별도의 회원 신원·프로젝트 소유권·선택한 산출물 저장을 다룹니다. 새 작업실은 위에 명시한 단계별 파일 생성·검수까지 구현합니다. 전체 운영 실행기, 인프라 연결, 조직별 공유, 공개 회원 서비스는 후속 구현입니다.
 
 공정 프로필에는 [Security Lane](docs/SECURITY_DELIVERY.md)을 추가했습니다. 원문과 내부 기준을 구분한 보안 요구사항·위협 모델·공통 접근 정책을 설계하고, **SG1 설계 검수 → 격리 DB·백엔드 정책 검사 → SG2 구현 검수 → SG3 배포 검수**를 후속 단계의 선행 조건으로 둡니다. 기존 세 계약과 시스템·디자인 병행 구조를 유지합니다. 이는 계획 의존성의 구현이며 실제 보안 검사나 배포 차단 서버가 아닙니다.
 

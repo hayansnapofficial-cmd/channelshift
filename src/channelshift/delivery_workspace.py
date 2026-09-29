@@ -56,6 +56,12 @@ def _extraction_snapshot(project):
     for answer in project['answer_history']:
         latest[(answer['candidate_revision'], answer['question_digest'])] = answer
     snapshot = _source_snapshot(project)
+    additions = project.get('source_additions', [])
+    for addition in additions:
+        snapshot['text'] += ('\n\n[추가 고객 요구사항 · ' + addition['id'] + ']\n' + addition['text'])
+    if additions:
+        snapshot['source_refs'] = [{'source_id': item['id'], 'source_digest': item['digest']}
+                                   for item in additions]
     for answer in latest.values():
         if not answer['answer'].strip():
             continue
@@ -166,6 +172,8 @@ class DeliveryWorkspace:
         for event in events:
             event['payload'] = json.loads(event['payload'])
         result['events'] = events
+        result['source_additions'] = [dict(event['payload'], created_at=event['created_at'])
+                                      for event in events if event['kind'] == 'client_request_added']
         result['references'] = [dict(event['payload']['result']) for event in events
                                 if event['kind'] == 'reference_recorded']
         settings = [event['payload'] for event in events if event['kind'] == 'workspace_settings_saved']
@@ -215,6 +223,9 @@ class DeliveryWorkspace:
         jobs = [event for event in events if event['kind'] == 'job_started']
         context = {key: result[key] for key in ('id', 'source', 'state', 'candidate', 'jev',
                                                'answer_context_digest', 'consent_revision')}
+        if result['source_additions']:
+            # Empty additions preserve legacy review digests byte-for-byte.
+            context['source_additions'] = result['source_additions']
         erd_events = [event for event in events if event['kind'] in
                       {'erd_started', 'erd_recorded', 'erd_failed', 'erd_edited'}]
         if result['state'] == 'DESIGNING_ERD' and erd_events and erd_events[-1]['kind'] == 'erd_started':
@@ -287,9 +298,32 @@ class DeliveryWorkspace:
                            'candidate_input': current['candidate_input'],
                            'answers': [dict(item, question_text=questions[item['question_id']]['text'])
                                        for item in current['question_answers']]}
+                if current['source_additions']:
+                    payload['source_additions'] = current['source_additions']
                 self._event(db, project_id, 'requirements_review_requested', payload)
             result = self._get(db, project_id)
         return result
+
+    def add_request(self, project_id, text, expected_revision):
+        """Append client scope evidence without replacing source or invoking AI."""
+        text = _text(text, 4000)
+        if not _hex_digest(expected_revision) or any(ord(char) < 32 and char not in '\r\n\t' for char in text):
+            raise ValueError('invalid_delivery_input')
+        with self._connect() as db:
+            db.execute('BEGIN IMMEDIATE')
+            project = self._get(db, project_id)
+            if project['intervention_revision'] != expected_revision:
+                raise ValueError('delivery_revision_conflict')
+            if project['state'] in BUSY_STATES:
+                raise ValueError('delivery_busy')
+            if len(project['events']) >= 1000:
+                raise ValueError('delivery_storage_limit')
+            addition = {'id': 'SRC-' + str(len(project['source_additions']) + 2).zfill(3),
+                        'text': text, 'digest': hashlib.sha256(text.encode('utf-8')).hexdigest()}
+            proposed = dict(project, source_additions=project['source_additions'] + [addition])
+            _extraction_snapshot(proposed)  # Check combined source and answers before writing.
+            self._event(db, project_id, 'client_request_added', addition)
+            return self._get(db, project_id)
 
     def return_to_intake(self, project_id, expected_revision):
         if not _hex_digest(expected_revision):
@@ -465,9 +499,12 @@ class DeliveryWorkspace:
             self._jobs.submit(self._run_reference, project, url, job_id)
         return self.get(project_id)
 
-    def generate_erd(self, project_id, database, expected_revision):
+    def generate_erd(self, project_id, database, expected_revision, *, pipeline_job_id=None):
         """Queue a schema draft from a frozen, current requirements review."""
         if type(database) is not str or database not in {'postgresql', 'mysql', 'sqlite'} or not _hex_digest(expected_revision):
+            raise ValueError('invalid_delivery_input')
+        if pipeline_job_id is not None and (type(pipeline_job_id) is not str or len(pipeline_job_id) != 32
+                                             or any(c not in '0123456789abcdef' for c in pipeline_job_id)):
             raise ValueError('invalid_delivery_input')
         with self._lock:
             if self._active:
@@ -493,11 +530,34 @@ class DeliveryWorkspace:
                 db.execute("UPDATE projects SET state='DESIGNING_ERD' WHERE id=?", (project_id,))
                 self._event(db, project_id, 'erd_started', {
                     'job_id': job_id, 'database': database, 'previous_state': project['state'],
+                    'pipeline_job_id': pipeline_job_id,
                     'input_snapshot': snapshot, 'review_context_revision': project['review_context_revision'],
                     'approval_granted': False, 'database_executed': False})
             self._active = True
             self._jobs.submit(self._run_erd, project, snapshot, database, job_id)
         return self.get(project_id)
+
+    def _recover_pipeline_erd(self, project_id, pipeline_job_id):
+        """Caller must first prove the owning pipeline process lifetime is dead."""
+        with self._lock, self._connect() as db:
+            db.execute('BEGIN IMMEDIATE')
+            project = self._get(db, project_id)
+            latest = next((event for event in reversed(project['events'])
+                           if event['kind'] in {'erd_started', 'erd_recorded', 'erd_failed'}), None)
+            if project['state'] != 'DESIGNING_ERD' or not latest or latest['kind'] != 'erd_started' \
+                    or latest['payload'].get('pipeline_job_id') != pipeline_job_id:
+                return False
+            started = latest['payload']
+            previous = started.get('previous_state')
+            if previous in BUSY_STATES or type(previous) is not str:
+                return False
+            db.execute('UPDATE projects SET state=? WHERE id=?', (previous, project_id))
+            self._event(db, project_id, 'erd_failed', {
+                'job_id': started['job_id'], 'code': 'delivery_recovery_required',
+                'database': started['database'], 'review_context_revision': started['review_context_revision'],
+                'pipeline_job_id': pipeline_job_id, 'approval_granted': False, 'database_executed': False,
+                'elapsed_ms': 0})
+            return True
 
     def _run_erd(self, project, snapshot, database, job_id):
         started = time.monotonic()
@@ -538,6 +598,13 @@ class DeliveryWorkspace:
         try:
             with self._connect() as db:
                 db.execute('BEGIN IMMEDIATE')
+                latest = db.execute("SELECT kind,payload FROM events WHERE project_id=? AND kind IN "
+                                    "('erd_started','erd_recorded','erd_failed') ORDER BY sequence DESC LIMIT 1",
+                                    (project['id'],)).fetchone()
+                current = db.execute('SELECT state FROM projects WHERE id=?', (project['id'],)).fetchone()
+                if not current or current['state'] != 'DESIGNING_ERD' or not latest \
+                        or latest['kind'] != 'erd_started' or json.loads(latest['payload']).get('job_id') != job_id:
+                    return
                 db.execute('UPDATE projects SET state=? WHERE id=?', (project['state'], project['id']))
                 self._event(db, project['id'], kind, payload)
         finally:

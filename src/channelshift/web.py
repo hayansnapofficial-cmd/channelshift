@@ -15,9 +15,16 @@ from .core import create_schema, export_java, export_sql, list_templates, valida
 from .store import MAX_BYTES, ProjectStore
 
 WEB = Path(__file__).with_name("web")
-ASSETS = {"/": ("index.html", "text/html; charset=utf-8"), "/app.js": ("app.js", "text/javascript; charset=utf-8"),
+ASSETS = {"/": ("studio.html", "text/html; charset=utf-8"), "/app.js": ("app.js", "text/javascript; charset=utf-8"),
+          "/studio": ("studio.html", "text/html; charset=utf-8"),
+          "/editor": ("index.html", "text/html; charset=utf-8"),
+          "/studio.js": ("studio.js", "text/javascript; charset=utf-8"),
+          "/studio-dom.js": ("studio-dom.js", "text/javascript; charset=utf-8"),
+          "/studio-policy.js": ("studio-policy.js", "text/javascript; charset=utf-8"),
+          "/studio-account.js": ("studio-account.js", "text/javascript; charset=utf-8"),
+          "/studio.css": ("studio.css", "text/css; charset=utf-8"),
           "/style.css": ("style.css", "text/css; charset=utf-8"),
-          "/delivery": ("delivery.html", "text/html; charset=utf-8"),
+          "/delivery": ("studio.html", "text/html; charset=utf-8"),
           "/delivery.js": ("delivery.js", "text/javascript; charset=utf-8"),
           "/delivery.css": ("delivery.css", "text/css; charset=utf-8"),
           "/workbench": ("workbench.html", "text/html; charset=utf-8"),
@@ -28,6 +35,7 @@ ASSETS = {"/": ("index.html", "text/html; charset=utf-8"), "/app.js": ("app.js",
 
 
 def error_code(error):
+    from .pipeline_workspace import ERRORS
     allowed = {"invalid_schema", "invalid_template", "unknown_template", "invalid_project", "invalid_database", "invalid_package",
                "invalid_java_package", "invalid_project_id", "project_not_found", "storage_index_limit", "invalid_label", "unsafe_storage",
                "unsupported_default", "unsupported_mysql_type", "unsupported_mysql_index",
@@ -38,11 +46,11 @@ def error_code(error):
                "invalid_impact_graph", "invalid_impact_field", "impact_graph_too_complex",
                "service_not_configured", "invalid_workbench_settings",
                "delivery_review_required", "delivery_erd_required", "delivery_erd_stale",
-               "delivery_client_requirements_required", "invalid_erd_input", "invalid_erd_schema"}
-    return str(error) if type(error) is ValueError and str(error) in allowed else "operation_failed"
+               "delivery_client_requirements_required", "invalid_erd_input", "invalid_erd_schema", "invalid_pipeline_preview"}
+    return str(error) if type(error) is ValueError and str(error) in allowed | ERRORS else "operation_failed"
 
 
-def handler_factory(store=None, token=None, delivery=None):
+def handler_factory(store=None, token=None, delivery=None, pipeline=None):
     projects = store or ProjectStore()
     token = token or secrets.token_urlsafe(32)
     delivery_lock = threading.Lock()
@@ -54,6 +62,16 @@ def handler_factory(store=None, token=None, delivery=None):
                 from .delivery_workspace import DeliveryWorkspace
                 delivery = DeliveryWorkspace()
         return delivery
+
+    def studio_workspace():
+        nonlocal pipeline
+        if pipeline is None:
+            from .pipeline_workspace import PipelineWorkspace
+            intake = intake_workspace()
+            with delivery_lock:
+                if pipeline is None:
+                    pipeline = PipelineWorkspace(intake)
+        return pipeline
 
     class Handler(BaseHTTPRequestHandler):
         server_version = "ChannelShift"
@@ -74,7 +92,10 @@ def handler_factory(store=None, token=None, delivery=None):
             self.send_header("Cache-Control", "no-store")
             self.send_header("X-Content-Type-Options", "nosniff")
             self.send_header("Referrer-Policy", "no-referrer")
-            self.send_header("Content-Security-Policy", "default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self' data:; connect-src 'self'; font-src 'none'; object-src 'none'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'")
+            if self.path.startswith('/studio-preview/'):
+                self.send_header('Content-Security-Policy', "sandbox; default-src 'none'; style-src 'unsafe-inline'; img-src data:; form-action 'none'; frame-ancestors 'self'; base-uri 'none'")
+            else:
+                self.send_header("Content-Security-Policy", "default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self' data:; connect-src 'self'; frame-src 'self'; font-src 'none'; object-src 'none'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'")
             self.send_header("Connection", "close")
             self.end_headers()
             self.close_connection = True
@@ -101,6 +122,8 @@ def handler_factory(store=None, token=None, delivery=None):
             asset_path = self.path.split('?', 1)[0]
             if asset_path in ASSETS:
                 name, mime = ASSETS[asset_path]
+                if asset_path == '/' and self.path.startswith('/?delivery='):
+                    name = 'index.html'
                 payload = (WEB / name).read_bytes()
                 if name.endswith(".html"):
                     payload = payload.replace(b"__CHANNELSHIFT_TOKEN__", token.encode("ascii"))
@@ -110,7 +133,25 @@ def handler_factory(store=None, token=None, delivery=None):
                 self.send(200, {"ok": True, "service": "channelshift-independent", "version": __version__})
                 return
             try:
-                if self.path == "/api/delivery/status":
+                if self.path.startswith('/studio-preview/'):
+                    from .pipeline_preview import render_preview
+                    parts = self.path.split('/')
+                    if len(parts) != 4 or parts[3] not in {'wireframe', 'frontend'}:
+                        raise ValueError('invalid_pipeline_input')
+                    view = studio_workspace().get(parts[2])
+                    stage = next(s for s in view['pipeline']['stages'] if s['id'] == parts[3])
+                    if stage['state'] not in {'generated', 'approved'} or not stage['artifact']:
+                        raise ValueError('pipeline_artifact_required')
+                    self.send(200, render_preview(stage['artifact']['files'], stage=parts[3]), 'text/html; charset=utf-8')
+                    return
+                elif self.path == '/api/studio/catalog':
+                    from .site_obligations import catalog
+                    value = {'ok': True, 'obligations': catalog()}
+                elif self.path == '/api/studio/projects':
+                    value = {'ok': True, 'items': intake_workspace().list()}
+                elif self.path.startswith('/api/studio/projects/'):
+                    value = studio_workspace().get(self.path.removeprefix('/api/studio/projects/'))
+                elif self.path == "/api/delivery/status":
                     from .codex_intake import status
                     from .jev_review import _credential, JevError
                     from .delivery_profile import standard_site_profile
@@ -118,7 +159,7 @@ def handler_factory(store=None, token=None, delivery=None):
                         configured = bool(_credential())
                     except JevError:
                         configured = False
-                    value = {"ok": True, "codex": status(), "jev_configured": configured,
+                    value = {"ok": True, "member_mode": False, "codex": status(), "jev_configured": configured,
                              "stages": [{"id": stage['id'], "title": stage['title']} for stage in standard_site_profile()['stages']]}
                 elif self.path == "/api/workbench/profile":
                     from .workbench import profile
@@ -158,7 +199,14 @@ def handler_factory(store=None, token=None, delivery=None):
                 data = json.loads(self.rfile.read(size), parse_constant=lambda _: (_ for _ in ()).throw(ValueError("invalid_json")))
                 if not isinstance(data, dict):
                     raise ValueError("invalid_schema")
-                if self.path == "/api/impact" and set(data) == {"schema", "table_id", "field_id", "graph"}:
+                if self.path == '/api/studio/projects' and set(data) == {'name', 'client_request', 'site_type'}:
+                    value = studio_workspace().create(**data)
+                elif self.path == '/api/studio/action' and set(data) == {'project_id', 'expected_revision', 'action', 'payload'}:
+                    value = studio_workspace().action(**data)
+                elif self.path == '/api/studio/bundle' and set(data) == {'project_id', 'expected_revision'}:
+                    self.send(200, studio_workspace().download(**data), 'application/zip')
+                    return
+                elif self.path == "/api/impact" and set(data) == {"schema", "table_id", "field_id", "graph"}:
                     from .impact import analyze_impact
                     value = {"ok": True, "impact": analyze_impact(data['schema'], data['table_id'], data['field_id'], data['graph'])}
                 elif self.path == "/api/delivery/projects" and set(data) == {"name", "client_request"}:
@@ -206,7 +254,7 @@ def handler_factory(store=None, token=None, delivery=None):
                 self.send(200, value)
             except Exception as error:
                 code = error_code(error)
-                self.send(409 if code == 'delivery_revision_conflict' else 400, {"ok": False, "error": code})
+                self.send(409 if code in {'delivery_revision_conflict', 'pipeline_revision_conflict', 'pipeline_busy'} else 400, {"ok": False, "error": code})
 
     return Handler
 
