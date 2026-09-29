@@ -7,7 +7,7 @@
 1. 검증한 wheel과 이 Dockerfile을 비밀값이 없는 새 빌드 디렉터리에 놓는다.
 2. 공식 Codex 0.159.0 Linux x86_64 musl **전체 패키지**를 받아 그 안의 파일을 `codex/` 아래 놓는다. 기존 서버의 Codex 설치는 교체하지 않는다.
 3. 공식 패키지 SHA-256은 `35da65d7e8644e28ea0a4d4e3d8c15b40c6b492356d4cf21986c7e341f83a24e`이다. 받은 파일의 digest를 확인하고 링크·경로를 검사한 뒤 추출한다.
-4. `docker build -t channelshift-members:0.2.1 .`로 이미지를 만든다.
+4. `docker build -t channelshift-members:0.2.2 .`로 이미지를 만든다.
 
 Codex의 `--no-daemon`, 격리된 회원 홈, 도구 비활성화 옵션을 유지한다. 회원 본인의 로그인은 실제 접속 후 수행한다. 운영자의 로그인 파일을 전달하지 않는다.
 

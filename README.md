@@ -8,7 +8,7 @@ ChannelShift is a member-scoped website production workspace, independent schema
 
 ## 새 제작 작업실
 
-v0.2.0 회원 서버 실행: `channelshift-members --port 5189` 또는 저장소의 `powershell -File scripts/start-members.ps1`. [작업실](http://127.0.0.1:5189/delivery)에서 로그인하고 **내 계정 → 내 Codex 연결**을 설정합니다. 공개 HTTPS 구성은 [서버 배포 안내](docs/DEPLOYMENT.md)를 따릅니다.
+v0.2.2 회원 서버 실행: `channelshift-members --port 5189` 또는 저장소의 `powershell -File scripts/start-members.ps1`. [작업실](http://127.0.0.1:5189/delivery)에서 로그인하고 **내 계정 → 내 Codex 연결**을 설정합니다. 공개 HTTPS 구성은 [서버 배포 안내](docs/DEPLOYMENT.md)를 따릅니다. 보안·공정 검사 변경은 [v0.2.2 배포 범위](docs/RELEASE_0_2_2.md)를 확인하세요.
 
 1. 새 프로젝트에 고객 원문을 넣고 **내 Codex로 정리**를 누릅니다.
 2. 질문에 답하고 **답변 저장하고 다시 정리**한 뒤 요구사양을 확정합니다.
@@ -103,7 +103,7 @@ codex mcp add channelshift -- "C:\absolute\path\.venv\Scripts\channelshift-mcp.e
 
 ## 스킬과 사용법
 
-[스킬](skills/channelshift/SKILL.md)을 `~/.codex/skills/channelshift`에 설치합니다. 릴리스의 `channelshift-skill-0.2.1.zip`은 이 폴더 구조와 독립 패키지 wheel을 포함합니다. 기존 스킬을 보관한 뒤 설치하고 새 Codex 작업에서 사용하세요. ZIP 안의 `scripts/install.py`는 패키지를 별도 가상환경에 설치하며 MCP 경로를 출력합니다.
+[스킬](skills/channelshift/SKILL.md)을 `~/.codex/skills/channelshift`에 설치합니다. 릴리스의 `channelshift-skill-0.2.2.zip`은 이 폴더 구조와 독립 패키지 wheel을 포함합니다. 기존 스킬을 보관한 뒤 설치하고 새 Codex 작업에서 사용하세요. ZIP 안의 `scripts/install.py`는 패키지를 별도 가상환경에 설치하며 MCP 경로를 출력합니다.
 
 요청 예시:
 
