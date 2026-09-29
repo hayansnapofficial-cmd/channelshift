@@ -12,4 +12,4 @@ RUN pip install --no-cache-dir /tmp/channelshift-${CHANNELSHIFT_VERSION}-py3-non
 COPY codex/ /opt/codex/
 USER 1000:1000
 WORKDIR /home/channelshift
-CMD ["channelshift-members", "--port", "5189", "--public-origin", "https://channelshift.net"]
+CMD ["channelshift-members", "--port", "5189", "--public-origin", "https://channelshift.net", "--trust-proxy-client-ip"]

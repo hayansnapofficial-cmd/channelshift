@@ -26,7 +26,7 @@ class IdentityFixture:
     def active_member(self, user_id):
         return any(user['id'] == user_id for user in self.sessions.values())
 
-    def login(self, username, password):
+    def login(self, username, password, *, client_ip):
         self.sessions['session-new-synthetic'] = self.users[username]
         return {'session_token': 'session-new-synthetic', 'user': self.users[username]}
 

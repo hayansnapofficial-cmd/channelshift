@@ -39,7 +39,7 @@ ASSETS = {"/": ("studio.html", "text/html; charset=utf-8"), "/app.js": ("app.js"
 def error_code(error):
     from .pipeline_workspace import ERRORS
     allowed = {"invalid_schema", "invalid_template", "unknown_template", "invalid_project", "invalid_database", "invalid_package",
-               "invalid_java_package", "invalid_project_id", "project_not_found", "storage_index_limit", "invalid_label", "unsafe_storage",
+               "invalid_java_package", "invalid_project_id", "project_not_found", "storage_index_limit", "storage_quota_exceeded", "invalid_label", "unsafe_storage",
                "unsupported_default", "unsupported_mysql_type", "unsupported_mysql_index",
                "java_json_mapping_unsupported", "java_name_collision", "invalid_format",
                "invalid_delivery_input", "invalid_delivery_project", "delivery_project_not_found",

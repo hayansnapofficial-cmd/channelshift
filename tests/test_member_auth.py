@@ -144,18 +144,92 @@ class MemberAuthTests(unittest.TestCase):
             fresh.login("missing_user", NEW_PASSWORD)
         self.assertEqual(self.hash_mock.call_count, 6)
 
-    def test_global_login_limit_covers_distinct_accounts_and_bounds_bucket_storage(self):
+    def test_blocked_account_cannot_spend_another_clients_login_budget(self):
+        self.verified()
+        for _ in range(100):
+            with self.assertRaises(AuthError):
+                self.auth.login('missing_user', NEW_PASSWORD, client_ip='192.0.2.1')
+        self.assertEqual(self.hash_mock.call_count, 7)  # register, verify, five dummy hashes
+        fresh = MemberAuth(self.path, clock=lambda: self.now)
+        self.assertTrue(fresh.login('member_one', NEW_PASSWORD, client_ip='192.0.2.2')['session_token'])
+        self.assertEqual(self.scalar("SELECT count(*) FROM rate_limits WHERE bucket LIKE 'login:%'"), 0)
+
+    def test_client_limit_covers_rotating_accounts_without_allocating_after_rejection(self):
+        self.verified()
+        before = self.hash_mock.call_count
         for index in range(30):
             with self.assertRaisesRegex(AuthError, "invalid_credentials"):
-                self.auth.login(f"missing_{index}", NEW_PASSWORD)
-        with self.assertRaisesRegex(AuthError, "rate_limited"):
-            self.auth.login("another_missing", NEW_PASSWORD)
+                self.auth.login(f"missing_{index}", NEW_PASSWORD, client_ip='192.0.2.1')
+        for index in range(50):
+            with self.assertRaisesRegex(AuthError, "rate_limited"):
+                self.auth.login(f"blocked_{index}", NEW_PASSWORD, client_ip='192.0.2.1')
+        self.assertEqual(self.hash_mock.call_count - before, 30)
+        self.assertEqual(self.scalar('SELECT count(*) FROM login_accounts'), 30)
+        self.assertEqual(self.scalar('SELECT max(count) FROM login_clients'), 30)
+        self.assertTrue(self.auth.login('member_one', NEW_PASSWORD, client_ip='192.0.2.2')['session_token'])
+
+    def test_legacy_and_other_auth_buckets_cannot_exhaust_login_state(self):
+        self.verified()
+        with self.auth._connect() as db:
+            db.execute('INSERT INTO rate_limits VALUES (?, ?, ?)', ('login:global', self.now, 999))
+        with patch('channelshift.member_auth.MAX_RATE_BUCKETS', 8):
+            for index in range(30):
+                try:
+                    self.auth.resend(f'unknown{index}@example.test')
+                except AuthError as error:
+                    self.assertEqual(str(error), 'rate_limited')
+        self.assertGreaterEqual(self.scalar('SELECT count(*) FROM rate_limits'), 8)
+        self.assertTrue(self.auth.login('member_one', NEW_PASSWORD)['session_token'])
+
+    def test_pool_saturation_preserves_member_budget_and_allows_unrelated_client(self):
+        self.verified()
+        self.auth.bootstrap_master('other_member', 'other@example.test', NEW_PASSWORD)
+        for _ in range(5):
+            with self.assertRaisesRegex(AuthError, '^invalid_credentials$'):
+                self.auth.login('member_one', 'wrong-password', client_ip='192.0.2.1')
+        with patch('channelshift.member_auth.MAX_LOGIN_CLIENTS', 4), \
+                patch('channelshift.member_auth.MAX_UNKNOWN_LOGINS', 4):
+            for index in range(20):
+                with self.assertRaisesRegex(AuthError, '^invalid_credentials$'):
+                    self.auth.login(f'unknown_{index}', NEW_PASSWORD, client_ip=f'198.51.100.{index + 1}')
+            before = self.hash_mock.call_count
+            with self.assertRaisesRegex(AuthError, '^rate_limited$'):
+                self.auth.login('member_one', NEW_PASSWORD, client_ip='203.0.113.1')
+            self.assertEqual(self.hash_mock.call_count, before)
+            # A new client can still be evaluated, without a blanket full-table denial.
+            with self.assertRaisesRegex(AuthError, '^invalid_credentials$'):
+                self.auth.login('fresh_user', NEW_PASSWORD, client_ip='203.0.113.2')
+            self.assertTrue(self.auth.login('other_member', NEW_PASSWORD, client_ip='203.0.113.3')['session_token'])
+            self.assertLessEqual(self.scalar('SELECT count(*) FROM login_clients'), 4)
+            self.assertEqual(self.scalar('SELECT count(*) FROM login_accounts WHERE member_id IS NOT NULL'), 2)
+            self.assertLessEqual(self.scalar('SELECT count(*) FROM login_accounts WHERE member_id IS NULL'), 4)
+        self.now += RATE_WINDOW
+        self.assertTrue(self.auth.login('member_one', NEW_PASSWORD, client_ip='203.0.113.2')['session_token'])
+
+    def test_client_limit_is_durable_expires_and_canonicalizes_ipv4_mapped_addresses(self):
+        for index in range(30):
+            with self.assertRaisesRegex(AuthError, '^invalid_credentials$'):
+                self.auth.login(f'unknown_{index}', NEW_PASSWORD, client_ip='192.0.2.1')
+        fresh = MemberAuth(self.path, clock=lambda: self.now)
+        with self.assertRaisesRegex(AuthError, '^rate_limited$'):
+            fresh.login('fresh_user', NEW_PASSWORD, client_ip='::ffff:192.0.2.1')
         self.assertEqual(self.hash_mock.call_count, 30)
-        with patch("channelshift.member_auth.MAX_RATE_BUCKETS", 32):
-            for index in range(50):
-                with self.assertRaisesRegex(AuthError, "rate_limited"):
-                    self.auth.login(f"blocked_{index}", NEW_PASSWORD)
-        self.assertLessEqual(self.scalar("SELECT count(*) FROM rate_limits"), 32)
+        self.now += RATE_WINDOW
+        with self.assertRaisesRegex(AuthError, '^invalid_credentials$'):
+            fresh.login('fresh_user', NEW_PASSWORD, client_ip='192.0.2.1')
+        self.assertEqual(self.hash_mock.call_count, 31)
+
+    def test_concurrent_account_admission_never_exceeds_five_hashes(self):
+        def attempt(index):
+            try:
+                self.auth.login('missing_user', NEW_PASSWORD, client_ip=f'192.0.2.{index + 1}')
+            except AuthError as error:
+                return str(error)
+        with ThreadPoolExecutor(max_workers=12) as pool:
+            results = list(pool.map(attempt, range(12)))
+        self.assertEqual(results.count('invalid_credentials'), 5)
+        self.assertEqual(results.count('rate_limited'), 7)
+        self.assertEqual(self.hash_mock.call_count, 5)
 
     def test_registration_capacity_is_bounded(self):
         with patch("channelshift.member_auth.MAX_PENDING", 1):

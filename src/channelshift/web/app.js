@@ -21,6 +21,7 @@
     forbidden: "연결을 확인할 수 없습니다. 편집 내용을 JSON으로 내려받은 뒤 페이지를 새로고침하세요.",
     body_too_large: "파일이 너무 큽니다. 2 MiB 이하의 설계 파일을 사용하세요.",
     too_large: "파일이 너무 큽니다. 2 MiB 이하의 설계 파일을 사용하세요.",
+    storage_quota_exceeded: "설계 저장 한도에 도달했습니다. 편집 내용을 JSON으로 내려받고 관리자에게 문의하세요.",
     delivery_erd_required: "이 프로젝트의 ERD 초안이 없습니다. 요구사항 검수에서 초안을 만들어 주세요.",
     delivery_erd_stale: "요구사항이 변경되어 이 초안을 저장할 수 없습니다. 편집 내용은 유지했습니다. JSON으로 보관한 뒤 요구사항을 확인하세요.",
     delivery_revision_conflict: "다른 창에서 ERD 초안이 변경되었습니다. 편집 내용은 유지했습니다. JSON으로 보관한 뒤 최신 초안을 다시 여세요.",
