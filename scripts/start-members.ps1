@@ -37,6 +37,9 @@ function Assert-PrivateAcl([string]$Path, $Sid) {
 if ($env:OS -ne 'Windows_NT' -or [string]::IsNullOrWhiteSpace($env:LOCALAPPDATA)) {
     throw 'This launcher requires Windows and LOCALAPPDATA.'
 }
+# A PowerShell 7 parent may pass its module search path to Windows PowerShell.
+# Load this shell's own security module before checking the private file ACL.
+Import-Module (Join-Path $PSHOME 'Modules\Microsoft.PowerShell.Security\Microsoft.PowerShell.Security.psd1') -ErrorAction Stop
 $repoRoot = [System.IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..'))
 Assert-NoReparsePoint $repoRoot
 if ([string]::IsNullOrWhiteSpace($Python)) { $Python = Join-Path $repoRoot '.venv\Scripts\python.exe' }

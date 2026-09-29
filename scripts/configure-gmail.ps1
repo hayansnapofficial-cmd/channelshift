@@ -53,6 +53,7 @@ function Write-NewFile([string]$Path, [byte[]]$Bytes) {
 if ($env:OS -ne 'Windows_NT' -or [string]::IsNullOrWhiteSpace($env:LOCALAPPDATA)) {
     throw 'This helper requires Windows and LOCALAPPDATA.'
 }
+Import-Module (Join-Path $PSHOME 'Modules\Microsoft.PowerShell.Security\Microsoft.PowerShell.Security.psd1') -ErrorAction Stop
 $localRoot = [System.IO.Path]::GetFullPath($env:LOCALAPPDATA)
 $mailRoot = [System.IO.Path]::GetFullPath((Join-Path $localRoot 'ChannelShift\mail'))
 if (-not $mailRoot.StartsWith($localRoot.TrimEnd('\') + '\', [System.StringComparison]::OrdinalIgnoreCase)) {

@@ -45,15 +45,25 @@
         <section class="work-section" aria-labelledby="selected-name">
           <div class="section-head"><h2 id="selected-name"></h2><span id="project-state" class="state-label"></span></div>
           <details class="source-details" open><summary>고객 원문</summary><pre id="source-text" class="source-text"></pre></details>
-          <div class="model-action"><p>Codex · 원문·저장된 답변 전송 · 내 계정 한도</p><button id="extract" class="button primary" type="button" disabled>Codex로 정리</button></div>
+          <div id="intake-extraction" class="model-action"><p>Codex · 원문·저장된 답변 전송 · 내 계정 한도</p><button id="extract" class="button primary" type="button" disabled>Codex로 정리</button></div>
         </section>
 
         <section id="candidate-panel" class="work-section" aria-labelledby="candidate-title" hidden>
           <div class="section-head"><h2 id="candidate-title">요구사항 초안</h2><span class="muted small">고객 확인 전</span></div>
           <div class="candidate-columns"><div><h3>고객 요구사항</h3><div id="client-requirements" class="result-list"></div></div><div><h3>내부 제안</h3><div id="internal-requirements" class="result-list"></div></div></div>
           <div class="candidate-columns secondary-results"><div><h3>확인할 질문</h3><p id="answer-summary" class="muted small" aria-live="polite"></p><div id="questions" class="result-list"></div><details class="event-details"><summary>답변 이력</summary><div id="answer-history" class="history-list"></div></details></div><div><h3>제외 항목</h3><div id="out-of-scope" class="result-list"></div></div></div>
+          <div class="next-step-actions"><p id="next-step-help" class="field-help" aria-live="polite"></p><button id="next-step" class="button primary" type="button" aria-describedby="next-step-help" disabled>저장하고 요구사항 검수</button></div>
           <div class="model-action"><p>Jev · 후보 생성 당시 입력·후보 전송 · 별도 과금</p><button id="review-jev" class="button secondary" type="button" disabled>Jev 검토</button></div>
           <div id="jev-results" class="result-list" aria-live="polite"></div>
+        </section>
+
+        <section id="requirements-review-panel" class="work-section" aria-labelledby="requirements-review-title" hidden>
+          <div class="section-head"><h2 id="requirements-review-title" tabindex="-1">요구사항 검수</h2><span class="state-label">검수 중</span></div>
+          <p class="section-description">저장한 요구사항과 답변을 함께 확인하세요. 수정할 내용이 있으면 접수로 돌아가세요.</p>
+          <p id="review-saved-at" class="field-help"></p>
+          <div class="candidate-columns"><div><h3>고객 요구사항</h3><div id="review-client-requirements" class="result-list"></div></div><div><h3>내부 제안</h3><div id="review-internal-requirements" class="result-list"></div></div></div>
+          <div class="candidate-columns"><div><h3>저장한 답변</h3><div id="review-answers" class="result-list"></div></div><div><h3>제외 항목</h3><div id="review-out-of-scope" class="result-list"></div></div></div>
+          <div class="form-actions"><button id="back-to-intake" class="button secondary" type="button">접수로 돌아가기</button></div>
         </section>
 
         <section class="work-section" aria-labelledby="consent-title">

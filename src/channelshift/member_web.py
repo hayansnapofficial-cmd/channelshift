@@ -24,6 +24,9 @@ from .web import WEB, handler_factory
 AUTH_ASSETS = {'/login': ('login.html', 'text/html; charset=utf-8'),
                '/login.js': ('login.js', 'text/javascript; charset=utf-8'),
                '/login.css': ('login.css', 'text/css; charset=utf-8')}
+ADMIN_ASSETS = {'/admin': ('admin.html', 'text/html; charset=utf-8'),
+                '/admin.js': ('admin.js', 'text/javascript; charset=utf-8'),
+                '/admin.css': ('admin.css', 'text/css; charset=utf-8')}
 AUTH_INPUTS = {'/api/auth/register': {'username', 'email', 'password'},
                '/api/auth/login': {'username', 'password'},
                '/api/auth/verify': {'token', 'password'},
@@ -34,7 +37,9 @@ AUTH_ERRORS = {'invalid_member_input': 400, 'invalid_input': 400, 'invalid_usern
                'email_not_configured': 503, 'email_delivery_failed': 503,
                'member_storage_limit': 429, 'registration_unavailable': 429,
                'auth_busy': 429, 'auth_unavailable': 503,
-               'auth_storage_unavailable': 503, 'unsafe_auth_storage': 503}
+               'auth_storage_unavailable': 503, 'unsafe_auth_storage': 503,
+               'admin_forbidden': 403, 'master_protected': 403,
+               'member_not_found': 404, 'invalid_admin_request': 400}
 
 
 def _disabled_provider(*_):
@@ -122,6 +127,16 @@ def member_handler_factory(auth, root, token=None):
                 self.send(302, {'ok': False, 'error': 'login_required'})
             return None
 
+        def require_master(self, user):
+            if user.get('role') != 'master':
+                self.send(403, {'ok': False, 'error': 'admin_forbidden'})
+                return False
+            return True
+
+        def auth_error(self, error):
+            code = str(error) if isinstance(error, ValueError) and str(error) in AUTH_ERRORS else 'operation_failed'
+            self.send(AUTH_ERRORS.get(code, 503), {'ok': False, 'error': code})
+
         def do_GET(self):
             if not self.guard(api=self.path.startswith('/api/')):
                 return
@@ -145,6 +160,24 @@ def member_handler_factory(auth, root, token=None):
             user = self.authenticated_user()
             if not user:
                 return
+            if self.path in ADMIN_ASSETS or self.path.startswith('/api/admin/'):
+                if not self.require_master(user):
+                    return
+                if self.path in ADMIN_ASSETS:
+                    name, mime = ADMIN_ASSETS[self.path]
+                    payload = (WEB / name).read_bytes()
+                    if name.endswith('.html'):
+                        payload = payload.replace(b'__CHANNELSHIFT_TOKEN__', token.encode('ascii'))
+                    self.send(200, payload, mime)
+                elif self.path == '/api/admin/overview':
+                    try:
+                        self.send(200, {'ok': True, 'members': auth.admin_members(user['id']),
+                                        'audit': auth.admin_audit(user['id'])})
+                    except Exception as error:
+                        self.auth_error(error)
+                else:
+                    self.send(404, {'ok': False, 'error': 'not_found'})
+                return
             if self.path == '/api/delivery/status':
                 self.send(200, {'ok': True, 'member_mode': True,
                                 'codex': {'can_execute': False, 'available': False,
@@ -156,7 +189,10 @@ def member_handler_factory(auth, root, token=None):
                 name = 'index.html' if self.path == '/' else 'delivery.html'
                 payload = (WEB / name).read_text(encoding='utf-8')
                 payload = payload.replace('__CHANNELSHIFT_TOKEN__', token)
-                payload = payload.replace('</header>', '<a class="text-button" href="/login">내 계정</a></header>', 1)
+                navigation = '<a class="text-button" href="/login">내 계정</a>'
+                if user.get('role') == 'master':
+                    navigation += '<a class="text-button" href="/admin">관리자</a>'
+                payload = payload.replace('</header>', navigation + '</header>', 1)
                 self.send(200, payload.encode('utf-8'), 'text/html; charset=utf-8')
                 return
             try:
@@ -173,6 +209,10 @@ def member_handler_factory(auth, root, token=None):
             user = self.authenticated_user()
             if not user:
                 return
+            if self.path.startswith('/api/admin/'):
+                if self.require_master(user):
+                    self.admin_post(user)
+                return
             if self.path in {'/api/delivery/extract', '/api/delivery/jev'}:
                 self.send(403, {'ok': False, 'error': 'member_provider_not_linked'})
                 return
@@ -180,6 +220,31 @@ def member_handler_factory(auth, root, token=None):
                 workspace_handler(user).do_POST(self)
             except (ValueError, OSError):
                 self.send(400, {'ok': False, 'error': 'operation_failed'})
+
+        def admin_post(self, user):
+            if self.path != '/api/admin/member-status':
+                self.send(404, {'ok': False, 'error': 'not_found'})
+                return
+            if self.headers.get('Content-Type', '').split(';')[0].strip() != 'application/json' or self.headers.get('Transfer-Encoding'):
+                self.send(415, {'ok': False, 'error': 'json_required'})
+                return
+            try:
+                length = int(self.headers.get('Content-Length', '-1'))
+                if not 0 < length <= 4096:
+                    self.send(413, {'ok': False, 'error': 'payload_too_large'})
+                    return
+                self.connection.settimeout(10)
+                data = json.loads(self.rfile.read(length), parse_constant=lambda _: (_ for _ in ()).throw(ValueError()))
+                if type(data) is not dict or set(data) != {'user_id', 'disabled', 'reason'}:
+                    raise ValueError('invalid_admin_request')
+                member = auth.admin_set_disabled(user['id'], **data)
+                self.send(200, {'ok': True, 'member': member})
+            except (ValueError, TypeError, KeyError, UnicodeError) as error:
+                if str(error) not in AUTH_ERRORS:
+                    error = ValueError('invalid_admin_request')
+                self.auth_error(error)
+            except Exception as error:
+                self.auth_error(error)
 
         def auth_post(self):
             fields = AUTH_INPUTS.get(self.path)

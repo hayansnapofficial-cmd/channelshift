@@ -53,6 +53,7 @@
     $("waiting-resend").disabled = state.pending || !ready || !state.status.email_configured;
     $("verify-submit").disabled = state.pending || !ready || !state.verificationToken;
     $("logout").disabled = state.pending || !ready || !state.status.user;
+    $("account-admin").hidden = state.status?.user?.role !== "master";
     $("connection-state").textContent = ready ? "회원 서버 연결됨" : "연결 확인 필요";
     $("email-warning").hidden = !ready || state.status.email_configured;
     $("email-warning").textContent = "메일 발송 설정이 없어 회원가입과 인증 메일 재발송을 사용할 수 없습니다.";
@@ -85,6 +86,7 @@
   }
   function validUsername(value) { return /^[A-Za-z0-9_]{4,32}$/.test(value); }
   function validPassword(value) { const count = Array.from(value).length; return count >= 15 && count <= 128; }
+  function validLoginPassword(value) { const count = Array.from(value).length; return count >= 1 && count <= 128; }
   function checkNewPassword(value, confirm) {
     if (!validPassword(value)) { message("비밀번호는 15~128자로 입력해 주세요.", true); return false; }
     if (value !== confirm) { message("비밀번호 확인이 일치하지 않습니다.", true); return false; }
@@ -107,7 +109,7 @@
   $("refresh-status").addEventListener("click", refreshStatus);
   $("login-form").addEventListener("submit", (event) => {
     event.preventDefault(); const username = $("login-username").value.trim(); const password = $("login-password").value;
-    if (!validUsername(username) || !validPassword(password)) { message("아이디는 영문·숫자·밑줄 4~32자, 비밀번호는 15~128자입니다.", true); return; }
+    if (!validUsername(username) || !validLoginPassword(password)) { message("아이디는 영문·숫자·밑줄 4~32자로, 비밀번호는 1~128자로 입력해 주세요.", true); return; }
     submit("/api/auth/login", { username, password }, () => { $("login-password").value = ""; window.location.assign("/delivery"); });
   });
   $("register-form").addEventListener("submit", (event) => {

@@ -205,8 +205,75 @@ class DeliveryWorkspace:
                                                'answer_context_digest', 'consent_revision')}
         context['job_id'] = jobs[-1]['payload']['job_id'] if jobs else None
         context['format'] = 'channelshift.intervention-revision/v1'
-        result['intervention_revision'] = hashlib.sha256(
-            json.dumps(context, sort_keys=True, ensure_ascii=True, allow_nan=False).encode('utf-8')).hexdigest()
+        # The review snapshot binds the evidence. The write revision additionally
+        # binds stage navigation so an old tab cannot undo a newer navigation.
+        result['review_context_revision'] = _digest(context)
+        navigation = [event for event in events if event['kind'] in
+                      {'requirements_review_requested', 'intake_reopened'}]
+        last_navigation = navigation[-1] if navigation else None
+        result['review_history'] = [dict(event['payload'], created_at=event['created_at'])
+                                    for event in navigation if event['kind'] == 'requirements_review_requested']
+        active_review = bool(last_navigation and last_navigation['kind'] == 'requirements_review_requested'
+                             and last_navigation['payload']['review_context_revision'] == result['review_context_revision'])
+        result['workflow_stage'] = 'requirements_review' if active_review else 'intake'
+        result['requirements_review'] = result['review_history'][-1] if active_review else None
+        if last_navigation:
+            context['workflow_sequence'] = last_navigation['sequence']
+        result['intervention_revision'] = _digest(context)
+        return result
+
+    def advance_to_review(self, project_id, expected_revision):
+        """Freeze the saved intake evidence for a local requirements review."""
+        if not _hex_digest(expected_revision):
+            raise ValueError('invalid_delivery_input')
+        with self._connect() as db:
+            db.execute('BEGIN IMMEDIATE')
+            current = self._get(db, project_id)
+            if expected_revision != current['intervention_revision']:
+                raise ValueError('delivery_revision_conflict')
+            if current['state'] in {'EXTRACTING', 'REVIEWING'}:
+                raise ValueError('delivery_busy')
+            if not current['candidate']:
+                raise ValueError('delivery_candidate_required')
+            if current['answer_summary']['blocking_unanswered']:
+                raise ValueError('delivery_answers_required')
+            if len(current['events']) >= 1000:
+                raise ValueError('delivery_storage_limit')
+            if current['workflow_stage'] != 'requirements_review':
+                questions = {item['id']: item for item in current['candidate'].get('questions', [])}
+                payload = {'workflow_stage': 'requirements_review', 'actor_type': 'local_operator',
+                           'approval_granted': False, 'intervention_revision': expected_revision,
+                           'review_context_revision': current['review_context_revision'],
+                           'candidate_revision': current['candidate_revision'],
+                           'source_digest': current['source']['digest'],
+                           'answer_context_digest': current['answer_context_digest'],
+                           'consent_revision': current['consent_revision'],
+                           'source': current['source'], 'candidate': current['candidate'],
+                           'candidate_input': current['candidate_input'],
+                           'answers': [dict(item, question_text=questions[item['question_id']]['text'])
+                                       for item in current['question_answers']]}
+                self._event(db, project_id, 'requirements_review_requested', payload)
+            result = self._get(db, project_id)
+        return result
+
+    def return_to_intake(self, project_id, expected_revision):
+        if not _hex_digest(expected_revision):
+            raise ValueError('invalid_delivery_input')
+        with self._connect() as db:
+            db.execute('BEGIN IMMEDIATE')
+            current = self._get(db, project_id)
+            if expected_revision != current['intervention_revision']:
+                raise ValueError('delivery_revision_conflict')
+            if current['state'] in {'EXTRACTING', 'REVIEWING'}:
+                raise ValueError('delivery_busy')
+            if len(current['events']) >= 1000:
+                raise ValueError('delivery_storage_limit')
+            self._event(db, project_id, 'intake_reopened', {
+                'workflow_stage': 'intake', 'intervention_revision': expected_revision,
+                'review_context_revision': current['review_context_revision'],
+                'candidate_revision': current['candidate_revision'], 'actor_type': 'local_operator',
+                'approval_granted': False})
+            result = self._get(db, project_id)
         return result
 
     def consent(self, project_id, mode, operator_label, reason, expected_revision):
@@ -228,15 +295,20 @@ class DeliveryWorkspace:
             self._event(db, project_id, 'consent_policy_recorded', payload)
         return self.get(project_id)
 
-    def answer(self, project_id, candidate_revision, question_id, question_digest, answer, expected_revision):
+    def answer(self, project_id, candidate_revision, question_id, question_digest, answer, expected_revision,
+               expected_context_revision=None):
         """Append a revision-bound answer locally; no provider call or approval."""
         if not all(_hex_digest(value) for value in (candidate_revision, question_digest, expected_revision)):
+            raise ValueError('invalid_delivery_input')
+        if expected_context_revision is not None and not _hex_digest(expected_context_revision):
             raise ValueError('invalid_delivery_input')
         _text(question_id, 64)
         answer = _text(answer, MAX_ANSWER, False)
         with self._connect() as db:
             db.execute('BEGIN IMMEDIATE')
             current = self._get(db, project_id)
+            if expected_context_revision is not None and expected_context_revision != current['intervention_revision']:
+                raise ValueError('delivery_revision_conflict')
             if candidate_revision != current['candidate_revision']:
                 raise ValueError('delivery_revision_conflict')
             selected = next((item for item in current['question_answers']
@@ -255,7 +327,8 @@ class DeliveryWorkspace:
                        'previous_revision': expected_revision, 'actor_type': 'local_operator', 'approval_granted': False}
             payload['answer_revision'] = _digest(payload)
             self._event(db, project_id, 'question_answered', payload)
-        return self.get(project_id)
+            result = self._get(db, project_id)
+        return result
 
     def intervene(self, project_id, stage_id, reason, note, decision, outcome, expected_revision):
         if type(stage_id) is not str or stage_id not in STAGE_IDS or type(reason) is not str or reason not in REASONS:
