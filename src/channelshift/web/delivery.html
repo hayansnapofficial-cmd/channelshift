@@ -1,0 +1,74 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="channelshift-token" content="__CHANNELSHIFT_TOKEN__">
+  <meta name="color-scheme" content="light">
+  <title>ChannelShift · 요구사항 접수</title>
+  <link rel="icon" href="data:,">
+  <link rel="stylesheet" href="/delivery.css">
+  <script src="/delivery.js" defer></script>
+</head>
+<body>
+  <a class="skip-link" href="#main">작업 화면으로 바로 가기</a>
+  <header class="app-header">
+    <a class="brand" href="/" aria-label="ChannelShift 홈"><span class="brand-mark" aria-hidden="true"><i></i><i></i><i></i></span><span>ChannelShift</span></a>
+    <nav aria-label="작업공간"><a href="/">DB 편집기</a><a href="/delivery" aria-current="page">요구사항 접수</a></nav>
+  </header>
+  <div class="layout">
+    <aside class="sidebar" aria-label="접수한 프로젝트">
+      <button id="new-project" class="button primary full" type="button">새 요청</button>
+      <div class="section-head"><h2>프로젝트</h2><button id="refresh-projects" class="text-button" type="button">새로고침</button></div>
+      <p id="project-list-status" class="muted small" role="status">불러오는 중</p>
+      <div id="project-list" class="project-list"></div>
+    </aside>
+    <main id="main" tabindex="-1">
+      <div class="page-heading"><h1>요구사항</h1></div>
+      <div id="message" class="message" role="status" aria-live="polite" hidden></div>
+      <section class="connections" aria-labelledby="connection-title">
+        <div class="section-head"><h2 id="connection-title">연결</h2><button id="refresh-status" class="text-button" type="button">새로고침</button></div>
+        <div class="connection-lines"><p><strong>내 Codex</strong><span id="codex-status">확인 중</span></p><p><strong>Jev · TypeSafe</strong><span id="jev-status">확인 중</span></p></div>
+      </section>
+
+      <section id="intake-panel" class="work-section" aria-label="새 요청">
+        <form id="intake-form">
+          <label for="client-request">고객 원문 <span class="required">필수</span></label>
+          <textarea id="client-request" name="client_request" rows="9" maxlength="12000" required placeholder="고객 요청을 붙여 넣으세요."></textarea>
+          <label for="project-name">프로젝트명 <span class="required">필수</span></label>
+          <input id="project-name" name="name" maxlength="200" required autocomplete="off" placeholder="예: 고객사 홈페이지">
+          <div class="form-actions"><button id="create-project" class="button primary" type="submit">저장</button></div>
+        </form>
+      </section>
+
+      <div id="project-panel" hidden>
+        <section class="work-section" aria-labelledby="selected-name">
+          <div class="section-head"><h2 id="selected-name"></h2><span id="project-state" class="state-label"></span></div>
+          <details class="source-details" open><summary>고객 원문</summary><pre id="source-text" class="source-text"></pre></details>
+          <div class="model-action"><p>Codex · 원문 전송 · 내 계정 한도</p><button id="extract" class="button primary" type="button" disabled>Codex로 정리</button></div>
+        </section>
+
+        <section id="candidate-panel" class="work-section" aria-labelledby="candidate-title" hidden>
+          <div class="section-head"><h2 id="candidate-title">요구사항 초안</h2><span class="muted small">고객 확인 전</span></div>
+          <div class="candidate-columns"><div><h3>고객 요구사항</h3><div id="client-requirements" class="result-list"></div></div><div><h3>내부 제안</h3><div id="internal-requirements" class="result-list"></div></div></div>
+          <div class="candidate-columns secondary-results"><div><h3>확인할 질문</h3><div id="questions" class="result-list"></div></div><div><h3>제외 항목</h3><div id="out-of-scope" class="result-list"></div></div></div>
+          <div class="model-action"><p>Jev · 원문·후보 전송 · 별도 과금</p><button id="review-jev" class="button secondary" type="button" disabled>Jev 검토</button></div>
+          <div id="jev-results" class="result-list" aria-live="polite"></div>
+        </section>
+
+        <section class="work-section" aria-labelledby="intervention-title">
+          <h2 id="intervention-title">개입 기록</h2>
+          <form id="intervention-form">
+            <div class="form-grid"><div><label for="stage-id">단계</label><select id="stage-id" name="stage_id"><option value="intake">고객 원문 접수</option></select></div><div><label for="intervention-reason">이유</label><select id="intervention-reason" name="reason"><option value="missing_client_info">고객 정보 부족</option><option value="contradictory_requirements">요구사항 모순</option><option value="model_error">모델 오류</option><option value="nonstandard_request">표준 밖 요청</option><option value="access_approval">권한·승인 확인</option><option value="quality_issue">품질 문제</option><option value="other">기타</option></select></div></div>
+            <label for="intervention-note">상황과 확인 내용 <span class="required">필수</span></label><textarea id="intervention-note" name="note" rows="3" maxlength="2000" required></textarea>
+            <div class="form-grid"><div><label for="intervention-decision">결정·다음 행동 <span class="required">필수</span></label><textarea id="intervention-decision" name="decision" rows="2" maxlength="2000" required></textarea></div><div><label for="intervention-outcome">결과·남은 문제</label><textarea id="intervention-outcome" name="outcome" rows="2" maxlength="2000"></textarea></div></div>
+            <div class="form-actions"><button id="save-intervention" class="button secondary" type="submit">개입 기록 저장</button></div>
+          </form>
+          <div id="interventions" class="history-list"></div>
+        </section>
+        <details class="work-section event-details"><summary>작업 이력</summary><div id="events" class="history-list"></div></details>
+      </div>
+    </main>
+  </div>
+</body>
+</html>

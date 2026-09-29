@@ -6,6 +6,7 @@ import hmac
 import json
 import secrets
 import sys
+import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
@@ -15,20 +16,38 @@ from .store import MAX_BYTES, ProjectStore
 
 WEB = Path(__file__).with_name("web")
 ASSETS = {"/": ("index.html", "text/html; charset=utf-8"), "/app.js": ("app.js", "text/javascript; charset=utf-8"),
-          "/style.css": ("style.css", "text/css; charset=utf-8")}
+          "/style.css": ("style.css", "text/css; charset=utf-8"),
+          "/delivery": ("delivery.html", "text/html; charset=utf-8"),
+          "/delivery.js": ("delivery.js", "text/javascript; charset=utf-8"),
+          "/delivery.css": ("delivery.css", "text/css; charset=utf-8"),
+          "/impact.js": ("impact.js", "text/javascript; charset=utf-8"),
+          "/impact.css": ("impact.css", "text/css; charset=utf-8")}
 
 
 def error_code(error):
     allowed = {"invalid_schema", "invalid_template", "unknown_template", "invalid_project", "invalid_database", "invalid_package",
                "invalid_java_package", "invalid_project_id", "project_not_found", "storage_index_limit", "invalid_label", "unsafe_storage",
                "unsupported_default", "unsupported_mysql_type", "unsupported_mysql_index",
-               "java_json_mapping_unsupported", "java_name_collision", "invalid_format"}
+               "java_json_mapping_unsupported", "java_name_collision", "invalid_format",
+               "invalid_delivery_input", "invalid_delivery_project", "delivery_project_not_found",
+               "delivery_storage_limit", "delivery_busy", "delivery_recovery_required", "delivery_candidate_required",
+               "delivery_revision_conflict",
+               "invalid_impact_graph", "invalid_impact_field", "impact_graph_too_complex"}
     return str(error) if type(error) is ValueError and str(error) in allowed else "operation_failed"
 
 
-def handler_factory(store=None, token=None):
+def handler_factory(store=None, token=None, delivery=None):
     projects = store or ProjectStore()
     token = token or secrets.token_urlsafe(32)
+    delivery_lock = threading.Lock()
+
+    def intake_workspace():
+        nonlocal delivery
+        with delivery_lock:
+            if delivery is None:
+                from .delivery_workspace import DeliveryWorkspace
+                delivery = DeliveryWorkspace()
+        return delivery
 
     class Handler(BaseHTTPRequestHandler):
         server_version = "ChannelShift"
@@ -76,7 +95,7 @@ def handler_factory(store=None, token=None):
             if self.path in ASSETS:
                 name, mime = ASSETS[self.path]
                 payload = (WEB / name).read_bytes()
-                if name == "index.html":
+                if name.endswith(".html"):
                     payload = payload.replace(b"__CHANNELSHIFT_TOKEN__", token.encode("ascii"))
                 self.send(200, payload, mime)
                 return
@@ -84,7 +103,21 @@ def handler_factory(store=None, token=None):
                 self.send(200, {"ok": True, "service": "channelshift-independent", "version": __version__})
                 return
             try:
-                if self.path == "/api/templates":
+                if self.path == "/api/delivery/status":
+                    from .codex_intake import status
+                    from .jev_review import _credential, JevError
+                    from .delivery_profile import standard_site_profile
+                    try:
+                        configured = bool(_credential())
+                    except JevError:
+                        configured = False
+                    value = {"ok": True, "codex": status(), "jev_configured": configured,
+                             "stages": [{"id": stage['id'], "title": stage['title']} for stage in standard_site_profile()['stages']]}
+                elif self.path == "/api/delivery/projects":
+                    value = {"ok": True, "items": intake_workspace().list()}
+                elif self.path.startswith("/api/delivery/projects/"):
+                    value = {"ok": True, "project": intake_workspace().get(self.path.removeprefix("/api/delivery/projects/"))}
+                elif self.path == "/api/templates":
                     value = {"ok": True, "items": list_templates()}
                 elif self.path == "/api/projects":
                     value = projects.list()
@@ -115,7 +148,17 @@ def handler_factory(store=None, token=None):
                 data = json.loads(self.rfile.read(size), parse_constant=lambda _: (_ for _ in ()).throw(ValueError("invalid_json")))
                 if not isinstance(data, dict):
                     raise ValueError("invalid_schema")
-                if self.path == "/api/generate" and set(data) <= {"templateId", "project", "database"}:
+                if self.path == "/api/impact" and set(data) == {"schema", "table_id", "field_id", "graph"}:
+                    from .impact import analyze_impact
+                    value = {"ok": True, "impact": analyze_impact(data['schema'], data['table_id'], data['field_id'], data['graph'])}
+                elif self.path == "/api/delivery/projects" and set(data) == {"name", "client_request"}:
+                    value = {"ok": True, "project": intake_workspace().create(data['name'], data['client_request'])}
+                elif self.path in {"/api/delivery/extract", "/api/delivery/jev"} and set(data) == {"project_id"}:
+                    operation = "extract" if self.path.endswith("/extract") else "jev"
+                    value = {"ok": True, "project": intake_workspace().start(data['project_id'], operation)}
+                elif self.path == "/api/delivery/intervention" and set(data) == {"project_id", "stage_id", "reason", "note", "decision", "outcome", "expected_revision"}:
+                    value = {"ok": True, "project": intake_workspace().intervene(**data)}
+                elif self.path == "/api/generate" and set(data) <= {"templateId", "project", "database"}:
                     value = {"ok": True, "schema": create_schema(data["templateId"], data["project"], data.get("database", "postgresql"))}
                 elif self.path == "/api/validate" and set(data) == {"schema"}:
                     value = {"ok": True, **validate_schema(data["schema"])}
@@ -134,7 +177,8 @@ def handler_factory(store=None, token=None):
                     return
                 self.send(200, value)
             except Exception as error:
-                self.send(400, {"ok": False, "error": error_code(error)})
+                code = error_code(error)
+                self.send(409 if code == 'delivery_revision_conflict' else 400, {"ok": False, "error": code})
 
     return Handler
 

@@ -5,6 +5,8 @@
 - `booking-schema.json`: 독립판의 기본 예약 템플릿으로 생성한 DB 설계 출발점.
 - `booking-blueprint.json`: 해당 설계에 연결된 Java/Spring 백엔드 요구사항과 사용자 조정 예시.
 - `../contracts/backend-blueprint.schema.json`: 이 초기 예시의 허용 항목·타입을 검사하는 JSON Schema Draft 2020-12 계약.
+- `company-site-brief.json`: 고객 원문 우선 접수 CLI의 합성 입력. 실제 고객 승인이나 납품 기록이 아니다.
+- `booking-impact-example.json`: `booking-schema.json`의 `customers.email`에 연결한 **합성 영향 관계 24개**다. 화면 검증용으로 API 4·백엔드 3·화면 6·테스트 11을 선언했으며 해당 구현 파일이 존재하거나 분석됐다는 뜻이 아니다. 편집기에서 스키마를 먼저 가져오고 변경 영향 패널에서 연결 파일을 불러온 뒤 해당 필드를 수정한다.
 
 `source.schema_version_id`는 예시용 UUID이며 실제 회원 서버에 저장됐다는 증거가 아니다. `source.digest.value`는 `booking-schema.json`을 현재 Python `channelshift.store.canonical` 방식으로 직렬화한 SHA-256이다. 원본 설계 내용과 예시의 연결만 확인한다. 작성자·시각·서버 보관·거래 진실성을 증명하지 않는다.
 

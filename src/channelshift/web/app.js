@@ -5,9 +5,10 @@
   const types = ["uuid", "varchar", "text", "integer", "bigint", "decimal", "boolean", "date", "timestamp", "json"];
   const state = {
     schema: emptySchema(), templates: [], projects: [], selectedTemplate: null,
-    topic: null, savedId: null, dirty: false, revision: 0, busy: false,
+    topic: null, savedId: null, dirty: false, revision: 0, busy: false, impactPending: false,
     view: "entities", format: "sql", files: [], fileIndex: 0, notificationTimer: null, confirmResolver: null,
   };
+  const impact = window.ChannelShiftImpact.create($("impact-panel"), { api, getSchema: snapshot });
   const errors = {
     invalid_schema: "구조가 올바르지 않습니다. 구조 검증에서 수정할 항목을 확인하세요.",
     validation_failed: "구조가 올바르지 않습니다. 구조 검증에서 수정할 항목을 확인하세요.",
@@ -137,11 +138,13 @@
   }
 
   function changed() {
+    if (state.impactPending) state.impactPending = false;
+    else impact.schemaChanged();
     state.dirty = true;
     state.revision += 1;
     state.files = [];
     state.fileIndex = 0;
-    $("validation-title").textContent = "구조가 변경되었습니다. 다시 검증하세요.";
+    $("validation-title").textContent = "재검증 필요";
     $("validation-dot").className = "status-dot";
     $("validation-issues").hidden = true;
     renderOutput();
@@ -165,6 +168,8 @@
   }
 
   function applySchema(schema, { savedId = null, topic = null, dirty = false } = {}) {
+    impact.reset();
+    state.impactPending = false;
     state.schema = schema;
     state.savedId = savedId;
     state.topic = topic;
@@ -174,7 +179,7 @@
     state.fileIndex = 0;
     $("project-name").value = schema.name;
     $("database").value = schema.database;
-    $("validation-title").textContent = "저장 전에 구조를 확인하세요.";
+    $("validation-title").textContent = "검증 대기";
     $("validation-dot").className = "status-dot";
     $("validation-issues").hidden = true;
     renderEntities();
@@ -209,7 +214,7 @@
       radio.checked = state.selectedTemplate === template.id;
       radio.addEventListener("change", () => { state.selectedTemplate = template.id; updateButtons(); });
       const copy = element("span");
-      copy.append(element("strong", null, template.title), element("small", null, template.description), element("small", "template-count", `테이블 ${template.tableCount}개`));
+      copy.append(element("strong", null, template.title), element("small", "template-count", `테이블 ${template.tableCount}개`));
       label.append(radio, copy);
       list.append(label);
     });
@@ -225,7 +230,7 @@
     const list = $("project-list");
     list.replaceChildren();
     if (!state.projects.length) {
-      list.append(element("p", "empty-versions", "아직 저장한 버전이 없습니다.\n구조를 만들고 첫 버전을 남겨 보세요."));
+      list.append(element("p", "empty-versions", "저장한 버전 없음"));
       return;
     }
     state.projects.forEach((project) => {
@@ -289,6 +294,7 @@
   }
 
   function renameAttribute(entity, attribute, name) {
+    previewFieldImpact(entity, attribute, true);
     const previous = attribute.name;
     attribute.name = name;
     (entity.indexes || []).forEach((index) => { index.columns = index.columns.map((column) => column === previous ? name : column); });
@@ -306,6 +312,7 @@
     const indexes = (entity.indexes || []).filter((index) => index.columns.includes(attribute.name));
     const losses = [`‘${entity.name}.${attribute.name}’ 필드`, ...(attached.length ? [`관계 ${attached.length}개`] : []), ...(indexes.length ? [`인덱스 ${indexes.length}개`] : [])];
     if (!await confirmDialog(`${losses.join(", ")}를 삭제하시겠습니까?`)) return;
+    previewFieldImpact(entity, attribute, true);
     entity.attributes = entity.attributes.filter((item) => item !== attribute);
     entity.indexes = (entity.indexes || []).filter((index) => !index.columns.includes(attribute.name));
     state.schema.relations = state.schema.relations.filter((relation) => !attached.includes(relation));
@@ -327,9 +334,7 @@
       const nameWrap = element("div", "entity-name-wrap");
       const name = input(entity.name, "테이블 이름", (value) => renameEntity(entity, value), { maxlength: 63, pattern: "[a-z][a-z0-9_]{0,62}", spellcheck: false });
       name.className = "entity-name";
-      const description = input(entity.description || "", `${entity.name} 테이블 설명`, (value) => { entity.description = value; changed(); }, { maxlength: 1000, placeholder: "테이블 설명 추가" });
-      description.className = "entity-description";
-      nameWrap.append(name, description);
+      nameWrap.append(name);
       identity.append(icon, nameWrap);
       head.append(identity, button("×", "icon-button entity-remove", () => removeEntity(entity), `${entity.name} 테이블 삭제`));
       const scroll = element("div", "attribute-scroll");
@@ -351,7 +356,7 @@
         if (count >= 2000) { notify("필드는 전체 2,000개까지 만들 수 있습니다.", true); return; }
         entity.attributes.push({ name: uniqueName("new_field", entity.attributes.map((item) => item.name)), type: "text", nullable: true, primary_key: false, unique: false });
         changed(); renderEntities();
-      }, `${entity.name}에 필드 추가`), element("small", null, `필드 ${entity.attributes.length}개 · PK 기본 키 · NULL 비어 있음 허용`));
+      }, `${entity.name}에 필드 추가`), element("small", null, `필드 ${entity.attributes.length}개`));
       card.append(head, scroll, foot);
       card.append(advancedFields(entity));
       list.append(card);
@@ -359,10 +364,21 @@
     updateCounts();
   }
 
+  function previewFieldImpact(entity, attribute, editing = false) {
+    impact.select(snapshot(), entity.name, attribute.name, { editing, fieldKey: attribute, tableKey: entity });
+    if (editing) state.impactPending = true;
+  }
+
   function attributeRow(entity, attribute) {
     const row = element("tr");
+    row.addEventListener("focusin", () => {
+      document.querySelectorAll(".impact-selected").forEach((item) => item.classList.remove("impact-selected"));
+      row.classList.add("impact-selected");
+      previewFieldImpact(entity, attribute);
+    });
     const fieldName = input(attribute.name, `${entity.name} 필드 이름`, (value) => renameAttribute(entity, attribute, value), { maxlength: 63, pattern: "[a-z][a-z0-9_]{0,62}", spellcheck: false });
     const type = select(types, attribute.type, `${entity.name}.${attribute.name} 타입`, (value) => {
+      previewFieldImpact(entity, attribute, true);
       attribute.type = value;
       if (value !== "varchar") delete attribute.length;
       if (value !== "decimal") { delete attribute.precision; delete attribute.scale; }
@@ -371,29 +387,35 @@
     const detail = element("div", "type-detail");
     if (attribute.type === "varchar") {
       detail.append(input(attribute.length, `${entity.name}.${attribute.name} 최대 길이`, (value) => {
+        previewFieldImpact(entity, attribute, true);
         if (value === "") delete attribute.length; else attribute.length = Number(value);
         changed();
       }, { type: "number", min: 1, max: 65535, placeholder: "기본" }));
     } else if (attribute.type === "decimal") {
       detail.append(input(attribute.precision, `${entity.name}.${attribute.name} 전체 자릿수`, (value) => {
+        previewFieldImpact(entity, attribute, true);
         if (value === "") delete attribute.precision; else attribute.precision = Number(value);
         changed();
       }, { type: "number", min: 1, max: 38, placeholder: "P" }), element("span", null, ","), input(attribute.scale, `${entity.name}.${attribute.name} 소수 자릿수`, (value) => {
+        previewFieldImpact(entity, attribute, true);
         if (value === "") delete attribute.scale; else attribute.scale = Number(value);
         changed();
       }, { type: "number", min: 0, max: 38, placeholder: "S" }));
     } else detail.append(element("span", "type-dash", "—"));
     const pk = checkbox(attribute.primary_key, `${entity.name}.${attribute.name} 기본 키`, (checked) => {
+      const changesOtherField = checked && entity.attributes.some((item) => item !== attribute && item.primary_key);
+      previewFieldImpact(entity, attribute, true);
       if (checked) {
         entity.attributes.forEach((item) => { item.primary_key = false; });
         attribute.primary_key = true; attribute.nullable = false;
       } else attribute.primary_key = false;
       changed(); renderEntities();
+      if (changesOtherField) impact.schemaChanged("기본 키 전환 · 전체 영향 미확인");
     });
-    const nullable = checkbox(attribute.nullable, `${entity.name}.${attribute.name} NULL 허용`, (checked) => { attribute.nullable = checked; changed(); });
+    const nullable = checkbox(attribute.nullable, `${entity.name}.${attribute.name} NULL 허용`, (checked) => { previewFieldImpact(entity, attribute, true); attribute.nullable = checked; changed(); });
     nullable.disabled = Boolean(attribute.primary_key);
     if (nullable.disabled) nullable.title = "기본 키는 NULL을 허용할 수 없습니다.";
-    const unique = checkbox(attribute.unique, `${entity.name}.${attribute.name} 고유 값`, (checked) => { attribute.unique = checked; changed(); });
+    const unique = checkbox(attribute.unique, `${entity.name}.${attribute.name} 고유 값`, (checked) => { previewFieldImpact(entity, attribute, true); attribute.unique = checked; changed(); });
     [fieldName, type, detail, pk, nullable, unique, button("×", "icon-button", () => removeAttribute(entity, attribute), `${entity.name}.${attribute.name} 필드 삭제`)].forEach((node, index) => {
       const cell = element("td", index > 2 && index < 6 ? "check-cell" : index === 6 ? "remove-cell" : "");
       cell.append(node); row.append(cell);
@@ -403,12 +425,17 @@
 
   function advancedFields(entity) {
     const details = element("details", "advanced-fields");
-    const count = entity.attributes.filter((attribute) => Object.hasOwn(attribute, "default")).length;
-    details.append(element("summary", null, `기본값 ${count}개 · 인덱스 ${(entity.indexes || []).length}개`));
+    details.append(element("summary", null, "상세 설정"));
     const content = element("div", "advanced-content");
-    content.append(element("p", "subtle", "기본값은 값으로만 저장됩니다. 임의의 SQL 표현식은 사용하지 않습니다."));
+    const description = input(entity.description || "", `${entity.name} 테이블 설명`, (value) => { entity.description = value; changed(); }, { maxlength: 1000, placeholder: "테이블 설명" });
+    description.className = "entity-description";
+    content.append(description);
     entity.attributes.forEach((attribute) => {
       const line = element("div", "default-row");
+      line.addEventListener("focusin", () => {
+        document.querySelectorAll(".impact-selected").forEach((item) => item.classList.remove("impact-selected"));
+        previewFieldImpact(entity, attribute);
+      });
       line.append(element("span", null, attribute.name));
       const modes = ["없음", "값", ...(attribute.type === "timestamp" ? ["현재 시각"] : [])];
       const current = !Object.hasOwn(attribute, "default") ? "없음" : attribute.default && typeof attribute.default === "object" ? "현재 시각" : "값";
@@ -417,12 +444,14 @@
           const parsed = JSON.parse(value);
           if (parsed !== null && !["string", "number", "boolean"].includes(typeof parsed)) throw new Error();
           if (typeof parsed === "number" && !Number.isFinite(parsed)) throw new Error();
+          previewFieldImpact(entity, attribute, true);
           attribute.default = parsed;
           changed();
         } catch { notify('기본값을 JSON 값으로 입력하세요. 예: "문자", 10, true, null', true); defaultInput.value = JSON.stringify(attribute.default); }
       }, { placeholder: '예: "문자", 10, true', maxlength: 10000, spellcheck: false, commitOn: "change" });
       defaultInput.disabled = current !== "값";
       const mode = select(modes, current, `${entity.name}.${attribute.name} 기본값 방식`, (value) => {
+        previewFieldImpact(entity, attribute, true);
         if (value === "없음") delete attribute.default;
         else if (value === "현재 시각") attribute.default = { function: "current_timestamp" };
         else attribute.default = attribute.type === "boolean" ? false : ["integer", "bigint", "decimal"].includes(attribute.type) ? 0 : "";
@@ -461,7 +490,7 @@
     const list = $("relation-list");
     list.replaceChildren();
     if (!state.schema.relations.length) {
-      list.append(element("p", "empty-relations", "아직 연결한 관계가 없습니다.\n테이블을 만든 뒤 외래 키 필드를 연결하세요."));
+      list.append(element("p", "empty-relations", "관계 없음"));
       return;
     }
     state.schema.relations.forEach((relation) => {
@@ -507,7 +536,7 @@
   function displayValidation(result) {
     const valid = result.valid;
     $("validation-dot").className = `status-dot ${valid ? "valid" : "invalid"}`;
-    $("validation-title").textContent = valid ? "검증 완료 · 구조에 문제가 없습니다." : `${result.issues.length}개 항목을 확인해 주세요.`;
+    $("validation-title").textContent = valid ? "검증 완료" : `확인 필요 ${result.issues.length}건`;
     const list = $("validation-issues");
     list.replaceChildren();
     list.hidden = valid;
@@ -544,15 +573,8 @@
   function renderOutput() {
     const format = state.format;
     const names = { sql: "SQL", java: "Java", json: "JSON" };
-    const description = {
-      sql: "선택한 데이터베이스의 테이블 생성문입니다.",
-      java: "엔티티와 Spring Data 저장소를 파일별로 확인하세요.",
-      json: "현재 편집 내용입니다. 다시 열어 설계를 이어갈 수 있습니다.",
-    };
     $("java-options").hidden = format !== "java";
     $("generate-output").textContent = `${names[format]} ${format === "json" ? "구조 검증" : "생성"}`;
-    $("output-description").textContent = description[format];
-    $("export-note").textContent = format === "java" ? "생성한 Java 코드는 프로젝트의 JDK·Spring·ORM 버전과 규칙을 확인한 뒤 적용하세요. 외래 키는 단순 필드로 유지됩니다." : format === "json" ? "ChannelShift 전용 설계 파일입니다. 레코드 데이터나 접속 정보를 포함하지 않습니다. 파일을 열 때 구조를 검증합니다." : "생성한 SQL은 직접 확인한 뒤 사용하세요. 이 편집기는 SQL을 실행하지 않습니다.";
     if (format === "json") state.files = [{ path: "schema.channelshift.json", content: JSON.stringify(state.schema, null, 2) + "\n" }];
     $("file-selector-wrapper").hidden = state.files.length < 2;
     const choices = $("output-file");
@@ -560,9 +582,9 @@
     state.files.forEach((file, index) => choices.append(option(String(index), file.path)));
     choices.value = String(state.fileIndex);
     const current = state.files[state.fileIndex];
-    $("code-filename").textContent = current ? current.path : format === "java" ? "Entity.java" : "schema.sql";
-    $("code-status").textContent = current ? format === "json" ? "현재 구조" : `${state.fileIndex + 1} / ${state.files.length}` : "미리보기";
-    $("code-content").textContent = current ? current.content : `// ${names[format]}를 생성하면 여기에 표시됩니다.\n// 구조를 수정한 뒤에는 다시 생성하세요.`;
+    $("code-filename").textContent = current ? current.path : "";
+    $("code-status").textContent = current ? format === "json" ? "현재 구조" : `${state.fileIndex + 1} / ${state.files.length}` : "생성 전";
+    $("code-content").textContent = current ? current.content : "";
     $("download-file").disabled = !current;
     $("copy-output").disabled = !current;
     $("download-bundle").hidden = format !== "java" || state.files.length === 0;
@@ -611,7 +633,7 @@
     const body = { schema: snapshot() };
     if (state.topic) body.topic = state.topic;
     const result = await api("/api/save", body);
-    if (state.revision === revision) { state.dirty = false; state.savedId = result.id; }
+    if (state.revision === revision) { state.dirty = false; state.savedId = result.id; impact.schemaChanged(); }
     await loadProjects();
     notify(result.stored ? "새 버전을 이 컴퓨터에 저장했습니다." : "동일한 구조가 이미 저장되어 있습니다.");
   }));
