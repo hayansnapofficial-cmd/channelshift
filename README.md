@@ -116,3 +116,7 @@ python scripts/build-release.py
 ```
 
 Node는 선택적인 JavaScript 문법 검사에만 사용합니다. 실행에는 필요 없습니다. 검사 결과와 한계는 [릴리스 기록](docs/RELEASE.md)을 따릅니다. 공개 웹사이트 배포나 `channelshift.net` 연결은 이 릴리스에 포함하지 않습니다.
+
+## 다음 단계의 설계
+
+[회원 플랫폼 설계안](docs/MEMBER_PLATFORM.md)은 공개 가입, 개인 작업공간, 백엔드 설계 보조와 세부 조정, 설계·코드 출처 및 실제 업무 원장 검증의 단계적 확장을 정의합니다. [설정 예시](docs/examples/README.md)는 검증 가능한 문서 계약이며, 이 기능들은 v0.1.0에 구현되거나 배포된 기능이 아닙니다.

@@ -1,0 +1,130 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:channelshift:backend-blueprint:v1-draft",
+  "title": "ChannelShift Backend Blueprint design contract (not a runtime feature)",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["format", "project", "source", "target", "profile", "requirements", "overrides", "evidence", "ledger"],
+  "properties": {
+    "format": {"const": "channelshift.backend-blueprint/v1-draft"},
+    "project": {
+      "type": "object", "additionalProperties": false,
+      "required": ["key", "name"],
+      "properties": {
+        "key": {"type": "string", "pattern": "^[a-z][a-z0-9-]{0,62}$"},
+        "name": {"type": "string", "minLength": 1, "maxLength": 200}
+      }
+    },
+    "source": {
+      "type": "object", "additionalProperties": false,
+      "required": ["schema_format", "schema_version_id", "digest"],
+      "properties": {
+        "schema_format": {"const": "channelshift.schema/v1"},
+        "schema_version_id": {"type": "string", "format": "uuid"},
+        "digest": {
+          "type": "object", "additionalProperties": false,
+          "required": ["algorithm", "canonicalization", "value"],
+          "properties": {
+            "algorithm": {"const": "sha256"},
+            "canonicalization": {"const": "channelshift-local-python-json/v1"},
+            "value": {"type": "string", "pattern": "^[0-9a-f]{64}$"}
+          }
+        }
+      }
+    },
+    "target": {
+      "type": "object", "additionalProperties": false,
+      "required": ["language", "framework", "database", "orm", "migrations", "readiness"],
+      "properties": {
+        "language": {"const": "java"},
+        "framework": {"const": "spring_boot"},
+        "database": {"const": "postgresql"},
+        "orm": {"const": "jakarta_jpa"},
+        "migrations": {"const": "flyway"},
+        "readiness": {"const": "proposed"}
+      }
+    },
+    "profile": {
+      "type": "object", "additionalProperties": false,
+      "required": ["id", "version"],
+      "properties": {
+        "id": {"const": "web-java-jpa"},
+        "version": {"const": "0.1.0-draft"}
+      }
+    },
+    "requirements": {
+      "type": "object", "additionalProperties": false,
+      "required": ["auth", "tenancy", "commands", "api"],
+      "properties": {
+        "auth": {"const": "oidc"},
+        "tenancy": {"const": "workspace"},
+        "commands": {
+          "type": "array", "minItems": 1, "maxItems": 100,
+          "items": {
+            "type": "object", "additionalProperties": false,
+            "required": ["id", "transaction", "idempotency", "authorization", "invariants"],
+            "properties": {
+              "id": {"type": "string", "pattern": "^[a-z][a-z0-9_]{0,62}$"},
+              "transaction": {"enum": ["required", "read_only"]},
+              "idempotency": {"enum": ["required", "not_applicable"]},
+              "authorization": {"const": "server_verified_workspace_membership"},
+              "invariants": {"type": "array", "minItems": 1, "maxItems": 30, "uniqueItems": true, "items": {"type": "string", "minLength": 1, "maxLength": 1000}}
+            }
+          }
+        },
+        "api": {
+          "type": "array", "minItems": 1, "maxItems": 100,
+          "items": {
+            "type": "object", "additionalProperties": false,
+            "required": ["method", "path", "command", "access"],
+            "properties": {
+              "method": {"enum": ["GET", "POST", "PUT", "PATCH", "DELETE"]},
+              "path": {"type": "string", "pattern": "^/[a-zA-Z0-9_/{}/-]+$", "maxLength": 240},
+              "command": {"type": "string", "pattern": "^[a-z][a-z0-9_]{0,62}$"},
+              "access": {"const": "workspace_member"}
+            }
+          }
+        }
+      }
+    },
+    "overrides": {
+      "type": "array", "maxItems": 20,
+      "items": {
+        "type": "object", "additionalProperties": false,
+        "required": ["path", "value", "reason"],
+        "properties": {
+          "path": {"type": "string"}, "value": {},
+          "reason": {"type": "string", "minLength": 1, "maxLength": 1000}
+        },
+        "oneOf": [
+          {"properties": {"path": {"const": "/naming/javaPackage"}, "value": {"type": "string", "pattern": "^[a-z][a-z0-9_]*(\\.[a-z][a-z0-9_]*)+$", "maxLength": 200}}},
+          {"properties": {"path": {"const": "/pagination/defaultPageSize"}, "value": {"type": "integer", "minimum": 1, "maximum": 100}}},
+          {"properties": {"path": {"const": "/api/basePath"}, "value": {"type": "string", "pattern": "^(/[a-z][a-z0-9_-]*)+$", "maxLength": 100}}},
+          {"properties": {"path": {"const": "/transactions/isolation"}, "value": {"enum": ["read_committed", "repeatable_read", "serializable"]}}}
+        ]
+      }
+    },
+    "evidence": {
+      "type": "object", "additionalProperties": false,
+      "required": ["status", "stages"],
+      "properties": {
+        "status": {"const": "planned"},
+        "stages": {"type": "array", "uniqueItems": true, "minItems": 1, "items": {"enum": ["schema_validation", "blueprint_validation", "generation", "compile", "authorization_tests", "migration_test", "deployment_receipt"]}}
+      }
+    },
+    "ledger": {
+      "type": "object", "additionalProperties": false,
+      "required": ["phases"],
+      "properties": {
+        "phases": {
+          "type": "array", "minItems": 2, "maxItems": 2,
+          "prefixItems": [
+            {"type": "object", "additionalProperties": false, "required": ["kind", "status"], "properties": {"kind": {"const": "design_provenance"}, "status": {"const": "planned"}}},
+            {"type": "object", "additionalProperties": false, "required": ["kind", "status", "source_record_access"], "properties": {"kind": {"const": "business_ledger"}, "status": {"const": "planned"}, "source_record_access": {"const": false}}}
+          ],
+          "items": false
+        }
+      }
+    }
+  }
+}
