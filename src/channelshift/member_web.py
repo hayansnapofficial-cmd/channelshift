@@ -127,7 +127,9 @@ def member_handler_factory(auth, root, token=None):
                 return
             if self.path in AUTH_ASSETS:
                 name, mime = AUTH_ASSETS[self.path]
-                payload = (WEB / name).read_bytes().replace(b'__CHANNELSHIFT_TOKEN__', token.encode('ascii'))
+                payload = (WEB / name).read_bytes()
+                if name.endswith('.html'):
+                    payload = payload.replace(b'__CHANNELSHIFT_TOKEN__', token.encode('ascii'))
                 self.send(200, payload, mime)
                 return
             if self.path == '/api/auth/status':

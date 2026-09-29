@@ -77,6 +77,21 @@ class MemberHTTPTests(unittest.TestCase):
         self.assertEqual(status, 302)
         self.assertEqual(headers['Location'], '/login')
 
+    def test_login_token_is_injected_only_into_html(self):
+        from channelshift.web import WEB
+        for path, filename in [('/login', 'login.html'), ('/login.js', 'login.js'), ('/login.css', 'login.css')]:
+            with self.subTest(path=path):
+                connection = http.client.HTTPConnection('127.0.0.1', self.server.server_port, timeout=5)
+                connection.request('GET', path)
+                response = connection.getresponse()
+                raw = response.read()
+                connection.close()
+                expected = (WEB / filename).read_bytes()
+                if filename.endswith('.html'):
+                    expected = expected.replace(b'__CHANNELSHIFT_TOKEN__', b'csrf-test')
+                self.assertEqual(response.status, 200)
+                self.assertEqual(raw, expected)
+
     def test_intake_read_write_and_history_are_isolated_by_member(self):
         _, result, _ = self.call('/api/delivery/projects', {'name': 'A only', 'client_request': 'A original'})
         project = result['project']
