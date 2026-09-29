@@ -1,7 +1,7 @@
 name: channelshift-platform
 services:
   members:
-    image: channelshift-members:0.2.1
+    image: channelshift-members:0.2.2
     network_mode: host
     restart: unless-stopped
     init: true
