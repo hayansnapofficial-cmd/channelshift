@@ -91,7 +91,10 @@ class MemberConnectionTests(unittest.TestCase):
         self.assertNotEqual(FakeServer.instances[0].home, FakeServer.instances[1].home)
         self.assertEqual(first["user_code"], "ABCD-1234")
         self.assertEqual(first["verification_url"], member._VERIFICATION_URL)
-        self.assertEqual(self.manager.connect(USER_A, SESSION_A), first)
+        repeated = self.manager.connect(USER_A, SESSION_A)
+        self.assertEqual({key: value for key, value in repeated.items() if key != 'expires_in'},
+                         {key: value for key, value in first.items() if key != 'expires_in'})
+        self.assertLessEqual(repeated['expires_in'], first['expires_in'])
         self.assertNotIn("user_code", self.manager.status(USER_A))
         self.assertNotIn("verification_url", self.manager.status(USER_A))
         for user, session, identifier in [(USER_B, SESSION_A, first["connection_id"]),

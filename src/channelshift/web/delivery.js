@@ -2,9 +2,9 @@
 
 (() => {
   const $ = (id) => document.getElementById(id);
-  const state = { status: null, project: null, projects: [], pending: false, advancing: false, timer: null, sequence: 0, interventionRevision: null, answerDrafts: new Map(), consentDrafts: new Map(), connection: null, connectionBusy: false, connectionTimer: null, connectionSequence: 0, referenceDrafts: new Map(), mcpConnection: null, mcpToken: "", mcpBusy: false, mcpSequence: 0, mcpDisplayAllowed: false };
+  const state = { status: null, project: null, projects: [], pending: false, advancing: false, timer: null, sequence: 0, interventionRevision: null, answerDrafts: new Map(), consentDrafts: new Map(), connection: null, connectionBusy: false, connectionTimer: null, connectionSequence: 0, referenceDrafts: new Map(), erdDatabaseDrafts: new Map(), mcpConnection: null, mcpToken: "", mcpBusy: false, mcpSequence: 0, mcpDisplayAllowed: false };
   const consentModes = { undecided: "미결정", required: "사용", not_required: "사용 안함" };
-  const labels = { RECEIVED: "접수됨", EXTRACTING: "Codex 정리 중", RUNNING: "작업 중", REVIEW_REQUIRED: "검토 필요", REVIEWING: "요구사항 검토 중", COLLECTING_REFERENCE: "참고 자료 수집 중", NEEDS_ATTENTION: "문제 확인 필요" };
+  const labels = { RECEIVED: "접수됨", EXTRACTING: "Codex 정리 중", RUNNING: "작업 중", REVIEW_REQUIRED: "검토 필요", REVIEWING: "요구사항 검토 중", COLLECTING_REFERENCE: "참고 자료 수집 중", DESIGNING_ERD: "ERD 초안 생성 중", NEEDS_ATTENTION: "문제 확인 필요" };
   const reasons = { missing_client_info: "고객 정보 부족", contradictory_requirements: "요구사항 모순", model_error: "모델 오류", nonstandard_request: "표준 밖 요청", access_approval: "권한·승인 확인", quality_issue: "품질 문제", other: "기타" };
   const errors = {
     member_provider_not_linked: "내 Codex 연결에서 본인 계정으로 로그인하세요.",
@@ -20,6 +20,13 @@
     delivery_busy: "다른 작업이 진행 중입니다. 작업 결과를 기다린 뒤 다시 시도하세요.",
     delivery_recovery_required: "이전 작업의 종료 확인이 필요합니다. 중복 실행하지 말고 담당자에게 실행 상태 점검을 요청하세요.",
     delivery_candidate_required: "Codex로 요구사항을 먼저 정리해 주세요.",
+    delivery_review_required: "저장한 답변과 요구사항을 검수한 뒤 ERD 초안을 만들 수 있습니다.",
+    delivery_client_requirements_required: "ERD 초안에 반영할 고객 요구사항이 필요합니다. 검수 내용을 확인하세요.",
+    delivery_erd_required: "먼저 요구사항 검수에서 ERD 초안을 만들어 주세요.",
+    delivery_erd_stale: "요구사항이 변경되었습니다. 검수 내용을 확인하고 ERD 초안을 다시 만들어 주세요.",
+    invalid_schema: "ERD 구조를 확인하지 못했습니다. 작업 이력을 확인한 뒤 다시 시도하세요.",
+    invalid_erd_input: "ERD 생성에 필요한 검수 내용이 올바르지 않습니다. 요구사항과 답변을 다시 확인하세요.",
+    codex_invalid_erd_output: "ERD 결과 형식이나 요구사항 연결 근거를 확인하지 못했습니다. 기존 초안은 유지했습니다. 작업 이력을 확인하세요.",
     delivery_answers_required: "필수 질문에 답변을 입력한 뒤 저장하고 요구사항 검수를 진행하세요.",
     delivery_revision_conflict: "검토 대상이 변경되었습니다. 메모는 보존했습니다. 최신 결과를 확인한 뒤 다시 저장하세요.",
     delivery_input_limit: "원문과 저장된 답변을 합친 정리 입력이 12,000자를 넘습니다. 답변 길이나 접수 범위를 조정해 주세요. 내용은 잘리지 않았습니다.",
@@ -71,7 +78,7 @@
     payload_too_large: "입력 내용이 너무 큽니다. 담당자와 접수 범위를 확인해 주세요.",
     operation_failed: "작업을 마치지 못했습니다. 연결 상태와 작업 이력을 확인한 뒤 다시 시도하세요.",
   };
-  const running = (project) => Boolean(project && ["EXTRACTING", "REVIEWING", "RUNNING", "COLLECTING_REFERENCE"].includes(project.state));
+  const running = (project) => Boolean(project && ["EXTRACTING", "REVIEWING", "RUNNING", "COLLECTING_REFERENCE", "DESIGNING_ERD"].includes(project.state));
   const text = (value) => typeof value === "string" ? value : "";
   const list = (value) => Array.isArray(value) ? value : [];
   function node(tag, className, value) { const el = document.createElement(tag); if (className) el.className = className; if (value !== undefined) el.textContent = String(value); return el; }
@@ -265,6 +272,10 @@
     $("next-step").textContent = state.advancing ? "저장하고 이동 중…" : "저장하고 요구사항 검수";
     $("next-step-help").textContent = state.advancing ? "답변을 저장하고 검수 화면을 준비하고 있습니다." : nextProblem || "작성한 답변을 모두 저장하고 요구사항 검수로 이동합니다.";
     $("back-to-intake").disabled = busy || state.project?.workflow_stage !== "requirements_review";
+    $("create-erd").disabled = busy || state.connectionBusy || !state.project?.requirements_review || state.project.workflow_stage !== "requirements_review" || state.status?.codex?.can_execute !== true;
+    $("erd-database").disabled = busy;
+    $("create-erd").textContent = state.project?.state === "DESIGNING_ERD" ? "초안 만드는 중…" : state.project?.erd_draft ? "ERD 초안 다시 만들기" : "ERD 초안 만들기";
+    $("erd-help").textContent = state.project?.state === "DESIGNING_ERD" ? "내 Codex가 저장된 검수 내용을 바탕으로 초안을 만들고 있습니다." : state.status?.codex?.state === "busy" ? "내 Codex의 작업이 끝나면 초안을 만들 수 있습니다." : state.status?.codex?.can_execute !== true ? "내 Codex를 연결한 뒤 초안을 만들 수 있습니다." : state.project?.erd_draft ? "다시 만들면 현재 편집 초안이 새 결과로 바뀝니다." : "버튼을 누르면 초안 생성을 시작합니다.";
     $("extract").textContent = state.project?.state === "EXTRACTING" ? "정리 중…" : "Codex로 정리";
     $("review-jev").textContent = state.project?.state === "REVIEWING" ? "검토 중…" : "요구사항 검토";
     renderConnection();
@@ -413,7 +424,8 @@
       const row = node("article", "history-item"); const kind = text(item.type) || text(item.event) || text(item.kind);
       const operationNames = { jev: "요구사항 검토 시작", extract: "Codex 정리 시작", codex: "Codex 정리 시작", reference: "참고 자료 수집 시작", reference_collect: "참고 자료 수집 시작" };
       const eventNames = { source_registered: "고객 원문 접수", job_started: operationNames[item.payload?.operation] || "작업 시작", candidate_recorded: "요구사항 초안 저장", advice_recorded: "요구사항 검토 의견 저장", reference_recorded: "참고 자료 저장", reference_failed: "참고 자료 수집 실패 · 확인 필요", job_failed: "작업 실패 · 확인 필요", human_intervention: "사람 개입 기록", question_answered: "질문 답변 저장", consent_policy_recorded: "동의 화면 설정 저장", requirements_review_requested: "요구사항 검수로 이동", intake_reopened: "접수로 돌아감" };
-      row.append(node("p", null, eventNames[kind] || "작업 상태 기록"), node("small", null, date(item.created_at || item.at)));
+      const erdEventNames = { erd_started: "ERD 초안 생성 시작", erd_recorded: "ERD 초안 저장", erd_edited: "ERD 편집 저장", erd_failed: "ERD 초안 생성 실패 · 확인 필요" };
+      row.append(node("p", null, eventNames[kind] || erdEventNames[kind] || "작업 상태 기록"), node("small", null, date(item.created_at || item.at)));
       const code = item.payload?.code || item.error; if (code) row.append(node("p", null, safeError(code))); events.append(row);
     });
     if (!list(project.events).length) events.append(node("p", "empty-result", "기록 없음"));
@@ -454,6 +466,25 @@
       target.append(row);
     });
     if (!target.children.length) target.append(node("p", "empty-result", "추가 질문 없음"));
+    const draft = project.erd_draft; const schema = draft?.result?.schema;
+    const database = state.erdDatabaseDrafts.get(project.id) || draft?.database || schema?.database || "postgresql";
+    $("erd-database").value = ["postgresql", "mysql", "sqlite"].includes(database) ? database : "postgresql";
+    $("erd-draft-status").textContent = project.state === "DESIGNING_ERD" ? "생성 중" : schema ? `테이블 ${list(schema.entities).length}개 · 관계 ${list(schema.relations).length}개` : "생성 전";
+    $("erd-stale").hidden = !draft || project.erd_current === true;
+    $("erd-no-data").hidden = !schema || list(schema.entities).length !== 0;
+    $("erd-design-details").hidden = !draft;
+    $("erd-trace-status").textContent = draft?.traceability_current === false ? "수동 편집 전 생성 근거입니다. 현재 테이블·필드와의 연결을 다시 확인하세요." : "초안 생성 당시의 요구사항 연결 근거입니다.";
+    const evidence = $("erd-design-evidence"); evidence.replaceChildren();
+    list(draft?.result?.traceability).forEach((item) => { const row = node("article", "result-item"); row.append(node("strong", null, text(item.entity)), node("p", null, list(item.requirement_ids).filter((id) => typeof id === "string").join(" · "))); evidence.append(row); });
+    list(draft?.result?.unmapped_requirements).forEach((item) => { const row = node("article", "result-item"); row.append(node("strong", null, `${text(item.requirement_id)} · DB 미반영`), node("p", null, text(item.reason))); evidence.append(row); });
+    list(draft?.result?.notes).forEach((note) => { const row = node("article", "result-item"); row.append(node("p", null, text(note))); evidence.append(row); });
+    if (draft && !evidence.children.length) evidence.append(node("p", "empty-result", "추가 설계 근거 없음"));
+    $("open-erd").hidden = !schema || project.erd_current !== true || running(project);
+    if (schema && project.erd_current === true) $("open-erd").href = `/?delivery=${encodeURIComponent(project.id)}`; else $("open-erd").removeAttribute("href");
+  }
+  function projectUrl(id) {
+    const url = new URL(window.location.href); if (id) url.searchParams.set("project", id); else url.searchParams.delete("project");
+    window.history.replaceState(null, "", url.pathname + url.search + url.hash);
   }
   function renderProject() {
     const project = state.project; $("intake-panel").hidden = Boolean(project); $("project-panel").hidden = !project; renderList(); controls();
@@ -479,12 +510,12 @@
   async function openProject(id) {
     if (state.pending || state.advancing) return; state.pending = true; controls();
     clearTimeout(state.timer); const sequence = ++state.sequence; message("");
-    try { const result = await api(`/api/delivery/projects/${encodeURIComponent(id)}`); if (sequence !== state.sequence) return; state.project = result.project; state.interventionRevision = null; $("intervention-form").reset(); renderProject(); schedulePoll(); } catch (error) { if (sequence === state.sequence) message(error.message, true); }
+    try { const result = await api(`/api/delivery/projects/${encodeURIComponent(id)}`); if (sequence !== state.sequence) return; state.project = result.project; projectUrl(state.project.id); state.interventionRevision = null; $("intervention-form").reset(); renderProject(); schedulePoll(); } catch (error) { if (sequence === state.sequence) message(error.message, true); }
     finally { state.pending = false; controls(); }
   }
   async function mutation(path, body, success, onSuccess = null) {
     if (state.pending) return false; state.pending = true; controls(); message("");
-    try { const result = await api(path, body); if (!result.project || typeof result.project.id !== "string") throw new Error("프로젝트 응답을 읽지 못했습니다. 목록을 새로고침해 저장 여부를 확인하세요."); state.project = result.project; if (onSuccess) onSuccess(); ++state.sequence; renderProject(); schedulePoll(); message(success); await refreshProjects(); return true; }
+    try { const result = await api(path, body); if (!result.project || typeof result.project.id !== "string") throw new Error("프로젝트 응답을 읽지 못했습니다. 목록을 새로고침해 저장 여부를 확인하세요."); state.project = result.project; projectUrl(state.project.id); if (onSuccess) onSuccess(); ++state.sequence; renderProject(); schedulePoll(); message(success); await refreshProjects(); return true; }
     catch (error) {
       let detail = error.message;
       if (error.status === 409 && path === "/api/delivery/answer") detail = "질문이나 저장된 답변이 변경되었습니다. 작성 중인 답변은 보존했습니다. 최신 내용을 확인해 주세요.";
@@ -547,6 +578,11 @@
   $("intake-form").addEventListener("submit", async (event) => { event.preventDefault(); const name = $("project-name").value.trim(); const request = $("client-request").value; if (!name || !request.trim()) { message("프로젝트명과 원문을 입력하세요.", true); return; } if (Array.from(request).length > 12000) { message("원문은 12,000자까지 저장할 수 있습니다. 내용을 줄여 주세요.", true); return; } if (await mutation("/api/delivery/projects", { name, client_request: request }, "원문 저장됨")) $("intake-form").reset(); });
   $("extract").addEventListener("click", () => { if (state.project && !$("extract").disabled) mutation("/api/delivery/extract", { project_id: state.project.id }, "Codex 정리 요청됨"); });
   $("review-jev").addEventListener("click", () => { if (state.project && !$("review-jev").disabled) mutation("/api/delivery/jev", { project_id: state.project.id }, "요구사항 검토 요청됨"); });
+  $("create-erd").addEventListener("click", () => {
+    if (!state.project || $("create-erd").disabled) return;
+    mutation("/api/delivery/erd", { project_id: state.project.id, database: $("erd-database").value, expected_revision: state.project.intervention_revision }, "ERD 초안 생성을 요청했습니다.");
+  });
+  $("erd-database").addEventListener("change", () => { if (state.project) state.erdDatabaseDrafts.set(state.project.id, $("erd-database").value); });
   $("connect-codex").addEventListener("click", () => connectionAction("start"));
   $("cancel-codex-login").addEventListener("click", () => connectionAction("cancel"));
   $("disconnect-codex").addEventListener("click", () => connectionAction("disconnect"));
@@ -604,10 +640,12 @@
   });
   $("intervention-form").addEventListener("input", () => { if (!state.interventionRevision) state.interventionRevision = state.project?.intervention_revision || null; });
   $("intervention-form").addEventListener("submit", async (event) => { event.preventDefault(); if (!state.project) return; const note = $("intervention-note").value.trim(); if (!note) { message("상황과 확인 내용을 입력하세요.", true); return; } const body = { project_id: state.project.id, expected_revision: state.interventionRevision || state.project.intervention_revision, stage_id: $("stage-id").value, reason: $("intervention-reason").value, note, decision: $("intervention-decision").value.trim(), outcome: $("intervention-outcome").value.trim() }; if (await mutation("/api/delivery/intervention", body, "개입 기록 저장됨")) { state.interventionRevision = null; $("intervention-form").reset(); } });
-  $("new-project").addEventListener("click", () => { if (state.pending || state.advancing) return; clearTimeout(state.timer); ++state.sequence; state.project = null; state.interventionRevision = null; $("intervention-form").reset(); message(""); renderProject(); $("client-request").focus(); });
+  $("new-project").addEventListener("click", () => { if (state.pending || state.advancing) return; clearTimeout(state.timer); ++state.sequence; state.project = null; projectUrl(null); state.interventionRevision = null; $("intervention-form").reset(); message(""); renderProject(); $("client-request").focus(); });
   $("refresh-projects").addEventListener("click", refreshProjects); $("refresh-status").addEventListener("click", refreshStatus);
   document.addEventListener("visibilitychange", () => { if (document.hidden) { stopConnectionPoll(); clearMcpToken(); } else scheduleConnectionPoll(); });
   window.addEventListener("pagehide", () => { clearTimeout(state.timer); stopConnectionPoll(); ++state.connectionSequence; ++state.mcpSequence; state.mcpBusy = false; clearMcpToken(); });
   window.addEventListener("pageshow", (event) => { if (event.persisted) refreshMcpConnection(); });
-  renderProject(); Promise.allSettled([refreshStatus(), refreshProjects()]);
+  renderProject();
+  const selectedProject = new URLSearchParams(window.location.search).get("project");
+  Promise.allSettled([refreshStatus(), refreshProjects(), selectedProject && /^[a-f0-9]{32}$/.test(selectedProject) ? openProject(selectedProject) : Promise.resolve()]);
 })();

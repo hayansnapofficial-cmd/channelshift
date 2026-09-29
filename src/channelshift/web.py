@@ -36,7 +36,9 @@ def error_code(error):
                "delivery_storage_limit", "delivery_busy", "delivery_recovery_required", "delivery_candidate_required",
                "delivery_revision_conflict", "delivery_input_limit", "delivery_answers_required",
                "invalid_impact_graph", "invalid_impact_field", "impact_graph_too_complex",
-               "service_not_configured", "invalid_workbench_settings"}
+               "service_not_configured", "invalid_workbench_settings",
+               "delivery_review_required", "delivery_erd_required", "delivery_erd_stale",
+               "delivery_client_requirements_required", "invalid_erd_input", "invalid_erd_schema"}
     return str(error) if type(error) is ValueError and str(error) in allowed else "operation_failed"
 
 
@@ -96,8 +98,9 @@ def handler_factory(store=None, token=None, delivery=None):
         def do_GET(self):
             if not self.guard(api=self.path.startswith("/api/")):
                 return
-            if self.path in ASSETS:
-                name, mime = ASSETS[self.path]
+            asset_path = self.path.split('?', 1)[0]
+            if asset_path in ASSETS:
+                name, mime = ASSETS[asset_path]
                 payload = (WEB / name).read_bytes()
                 if name.endswith(".html"):
                     payload = payload.replace(b"__CHANNELSHIFT_TOKEN__", token.encode("ascii"))
@@ -177,6 +180,10 @@ def handler_factory(store=None, token=None, delivery=None):
                     value = {"ok": True, "project": intake_workspace().return_to_intake(**data)}
                 elif self.path == "/api/delivery/references" and set(data) == {"project_id", "url", "expected_revision"}:
                     value = {"ok": True, "project": intake_workspace().collect_reference(**data)}
+                elif self.path == "/api/delivery/erd" and set(data) == {"project_id", "database", "expected_revision"}:
+                    value = {"ok": True, "project": intake_workspace().generate_erd(**data)}
+                elif self.path == "/api/delivery/erd/save" and set(data) == {"project_id", "schema", "expected_revision"}:
+                    value = {"ok": True, "project": intake_workspace().save_erd(**data)}
                 elif self.path == "/api/workbench/settings" and set(data) == {"project_id", "section", "values", "expected_revision"}:
                     value = {"ok": True, "project": intake_workspace().save_settings(**data)}
                 elif self.path == "/api/generate" and set(data) <= {"templateId", "project", "database"}:

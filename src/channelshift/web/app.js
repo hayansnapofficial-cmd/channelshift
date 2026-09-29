@@ -7,6 +7,7 @@
     schema: emptySchema(), templates: [], projects: [], selectedTemplate: null,
     topic: null, savedId: null, dirty: false, revision: 0, busy: false, impactPending: false,
     view: "entities", format: "sql", files: [], fileIndex: 0, notificationTimer: null, confirmResolver: null,
+    delivery: null, deliveryBlocked: null, deliveryConflict: false,
   };
   const impact = window.ChannelShiftImpact.create($("impact-panel"), { api, getSchema: snapshot });
   const errors = {
@@ -20,6 +21,12 @@
     forbidden: "연결을 확인할 수 없습니다. 편집 내용을 JSON으로 내려받은 뒤 페이지를 새로고침하세요.",
     body_too_large: "파일이 너무 큽니다. 2 MiB 이하의 설계 파일을 사용하세요.",
     too_large: "파일이 너무 큽니다. 2 MiB 이하의 설계 파일을 사용하세요.",
+    delivery_erd_required: "이 프로젝트의 ERD 초안이 없습니다. 요구사항 검수에서 초안을 만들어 주세요.",
+    delivery_erd_stale: "요구사항이 변경되어 이 초안을 저장할 수 없습니다. 편집 내용은 유지했습니다. JSON으로 보관한 뒤 요구사항을 확인하세요.",
+    delivery_revision_conflict: "다른 창에서 ERD 초안이 변경되었습니다. 편집 내용은 유지했습니다. JSON으로 보관한 뒤 최신 초안을 다시 여세요.",
+    delivery_project_not_found: "연결된 요구사항 프로젝트를 찾지 못했습니다. 요구사항 목록을 확인하세요.",
+    delivery_busy: "프로젝트 작업이 진행 중입니다. 편집 내용은 유지했습니다. 작업이 끝난 뒤 다시 저장하세요.",
+    login_required: "로그인이 만료되었습니다. 편집 내용을 JSON으로 보관한 뒤 다시 로그인하세요.",
   };
 
   function emptySchema() {
@@ -95,7 +102,8 @@
     if (!response.ok || data.ok !== true) {
       const code = typeof data.error === "string" ? data.error : "unknown_error";
       const safeCode = /^[a-z0-9_]{1,80}$/.test(code) ? code : "unknown_error";
-      throw new Error(errors[safeCode] || `요청을 완료하지 못했습니다. 오류 코드: ${safeCode}`);
+      const error = new Error(errors[safeCode] || `요청을 완료하지 못했습니다. 오류 코드: ${safeCode}`);
+      error.code = safeCode; error.status = response.status; throw error;
     }
     return data;
   }
@@ -120,14 +128,18 @@
 
   function updateButtons() {
     ["save-project", "generate-template", "validate", "generate-output", "refresh-projects", "import-trigger", "new-project"].forEach((id) => {
-      $(id).disabled = state.busy || (id === "generate-template" && !state.selectedTemplate);
+      $(id).disabled = state.busy || (id === "generate-template" && !state.selectedTemplate) || (Boolean(state.deliveryBlocked) && ["save-project", "validate", "generate-output"].includes(id));
     });
-    $("add-relation").disabled = !state.schema.entities.length;
-    $("project-name").disabled = state.busy;
-    $("database").disabled = state.busy;
+    $("add-relation").disabled = !state.schema.entities.length || Boolean(state.deliveryBlocked);
+    $("add-entity").disabled = state.busy || Boolean(state.deliveryBlocked);
+    $("empty-add").disabled = state.busy || Boolean(state.deliveryBlocked);
+    $("project-name").disabled = state.busy || Boolean(state.deliveryBlocked);
+    $("database").disabled = state.busy || Boolean(state.deliveryBlocked);
     document.querySelector(".app-layout").inert = state.busy;
     document.querySelector(".app-layout").setAttribute("aria-busy", String(state.busy));
-    $("save-state").textContent = state.busy ? "처리 중…" : state.dirty ? "저장하지 않은 변경" : state.savedId ? "저장됨" : "저장 전";
+    $("save-state").textContent = state.busy ? "처리 중…" : state.dirty ? "저장하지 않은 변경" : state.delivery ? "요구사항 초안 저장됨" : state.savedId ? "저장됨" : "저장 전";
+    $("save-project").textContent = state.delivery ? "연결된 초안 저장" : "버전 저장";
+    renderDeliveryLink();
   }
 
   function updateCounts() {
@@ -142,6 +154,7 @@
     else impact.schemaChanged();
     state.dirty = true;
     state.revision += 1;
+    if (state.delivery) state.delivery.traceabilityCurrent = false;
     state.files = [];
     state.fileIndex = 0;
     $("validation-title").textContent = "재검증 필요";
@@ -167,10 +180,25 @@
     return confirmDialog("저장하지 않은 변경이 있습니다. 현재 편집 내용을 바꾸시겠습니까? 필요하면 먼저 버전 저장 또는 JSON 다운로드를 해 주세요.");
   }
 
-  function applySchema(schema, { savedId = null, topic = null, dirty = false } = {}) {
+  function renderDeliveryLink() {
+    const source = state.delivery || state.deliveryBlocked;
+    $("delivery-link-banner").hidden = !source;
+    $("delivery-link-banner").classList.toggle("error", Boolean(state.deliveryBlocked) || state.deliveryConflict);
+    $("delivery-link-title").textContent = source ? `${source.name || "프로젝트"} · 요구사항 연결` : "";
+    $("delivery-back-link").href = source ? `/delivery?project=${encodeURIComponent(source.projectId)}` : "/delivery";
+    $("delivery-link-help").textContent = state.deliveryBlocked ? state.deliveryBlocked.message : state.deliveryConflict ? "서버 초안이나 요구사항이 변경되었습니다. 현재 편집은 보존했습니다. JSON으로 보관한 뒤 요구사항에서 최신 초안을 확인하세요." : state.delivery?.traceabilityCurrent === false ? "수동 편집한 구조입니다. 요구사항과 테이블·필드 연결 근거를 다시 확인하세요. 저장해도 실제 DB를 실행하거나 설계를 승인하지 않습니다." : "이 편집은 해당 요구사항의 ERD 초안에 저장됩니다. 테이블·필드를 바꾸면 요구사항과의 연결 근거를 다시 확인하세요.";
+    document.querySelectorAll('a[href^="/delivery"]').forEach((link) => { if (link.id !== "delivery-back-link") link.href = source ? `/delivery?project=${encodeURIComponent(source.projectId)}` : "/delivery"; });
+  }
+  function setDeliveryUrl(projectId) {
+    const url = new URL(window.location.href); if (projectId) url.searchParams.set("delivery", projectId); else url.searchParams.delete("delivery");
+    window.history.replaceState(null, "", url.pathname + url.search + url.hash);
+  }
+  function applySchema(schema, { savedId = null, topic = null, dirty = false, delivery = null } = {}) {
     impact.reset();
     state.impactPending = false;
     state.schema = schema;
+    state.delivery = delivery; state.deliveryBlocked = null; state.deliveryConflict = false;
+    setDeliveryUrl(delivery?.projectId || null);
     state.savedId = savedId;
     state.topic = topic;
     state.dirty = dirty;
@@ -188,6 +216,20 @@
     renderProjects();
     updateCounts();
     switchView("entities");
+  }
+  async function loadDeliveryDraft(projectId) {
+    try {
+      const result = await api(`/api/delivery/projects/${encodeURIComponent(projectId)}`);
+      const project = result.project; const draft = project?.erd_draft; const schema = draft?.result?.schema;
+      if (project?.erd_current !== true || !schema || !Array.isArray(schema.entities) || !Array.isArray(schema.relations) || typeof draft.revision !== "string") {
+        state.deliveryBlocked = { projectId, name: project?.name || "프로젝트", message: draft ? "요구사항이 변경되어 이전 초안을 열지 않았습니다. 요구사항 검수에서 새 초안을 만들어 주세요." : "ERD 초안이 없습니다. 요구사항 검수에서 초안을 만들어 주세요." };
+        updateButtons(); return;
+      }
+      applySchema(schema, { delivery: { projectId, name: project.name, revision: draft.revision, traceabilityCurrent: draft.traceability_current === true } });
+      notify("요구사항에 연결된 저장 초안을 불러왔습니다.");
+    } catch (error) {
+      state.deliveryBlocked = { projectId, name: "프로젝트", message: error.message }; updateButtons(); throw error;
+    }
   }
 
   async function loadTemplates() {
@@ -628,8 +670,24 @@
   $("refresh-projects").addEventListener("click", () => run(async () => { await loadProjects(); notify("저장한 버전을 새로 불러왔습니다."); }));
   $("validate").addEventListener("click", () => run(() => validateCurrent()));
   $("save-project").addEventListener("click", () => run(async () => {
+    if (state.deliveryBlocked) return;
     if (!await validateCurrent(false)) { notify("저장하기 전에 검증 결과를 확인해 주세요.", true); return; }
     const revision = state.revision;
+    if (state.delivery) {
+      try {
+        const result = await api("/api/delivery/erd/save", { project_id: state.delivery.projectId, schema: snapshot(), expected_revision: state.delivery.revision });
+        const draft = result.project?.erd_draft;
+        if (typeof draft?.revision !== "string") throw new Error("저장 응답을 확인하지 못했습니다. 편집 내용은 유지했습니다. 요구사항에서 저장 여부를 확인하세요.");
+        if (state.revision === revision) {
+          state.dirty = false; state.delivery.revision = draft.revision; state.delivery.traceabilityCurrent = draft.traceability_current === true; state.deliveryConflict = false; impact.schemaChanged();
+        }
+        notify("요구사항에 연결된 ERD 초안을 저장했습니다. 연결 근거를 다시 확인하세요.");
+      } catch (error) {
+        if (["delivery_revision_conflict", "delivery_erd_stale"].includes(error.code)) state.deliveryConflict = true;
+        throw error;
+      }
+      return;
+    }
     const body = { schema: snapshot() };
     if (state.topic) body.topic = state.topic;
     const result = await api("/api/save", body);
@@ -719,12 +777,26 @@
   });
   document.querySelector(".brand").addEventListener("click", async (event) => {
     event.preventDefault();
-    if (await confirmReplace()) window.location.reload();
+    if (await confirmReplace()) { state.dirty = false; window.location.reload(); }
   });
+  document.addEventListener("click", async (event) => {
+    const link = event.target.closest("a[href]");
+    if (event.defaultPrevented || !link || link.hasAttribute("download") || link.target === "_blank" || !state.dirty || event.ctrlKey || event.metaKey || event.shiftKey || event.altKey || event.button !== 0) return;
+    const url = new URL(link.href, window.location.href);
+    if (url.origin !== window.location.origin || (url.pathname === window.location.pathname && url.search === window.location.search)) return;
+    event.preventDefault();
+    if (await confirmReplace()) { state.dirty = false; window.location.assign(url.href); }
+  });
+  window.addEventListener("beforeunload", (event) => { if (state.dirty) { event.preventDefault(); event.returnValue = ""; } });
 
   renderEntities();
   renderRelations();
   renderOutput();
+  const deliveryProjectId = new URLSearchParams(window.location.search).get("delivery");
+  if (deliveryProjectId) {
+    if (/^[a-f0-9]{32}$/.test(deliveryProjectId)) run(() => loadDeliveryDraft(deliveryProjectId));
+    else { state.deliveryBlocked = { projectId: "", name: "프로젝트", message: "요구사항 연결 주소가 올바르지 않습니다. 요구사항 화면에서 편집기를 다시 여세요." }; updateButtons(); }
+  }
   Promise.allSettled([loadTemplates(), loadProjects()]).then((results) => {
     results.forEach((result, index) => {
       if (result.status === "rejected") {

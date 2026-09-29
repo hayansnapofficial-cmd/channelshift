@@ -1,11 +1,13 @@
-"""Local intake pilot: durable sources, explicit provider jobs and human reasons.
+"""Local intake and unapproved ERD drafts with durable evidence and history.
 
 Single OS user only. This is not member authentication or a production scheduler.
-No route promotes an intake candidate to approved or runs design/build/deployment.
+Explicit generation produces a draft only. No route grants approval, executes
+database DDL, builds an application, or deploys it.
 """
 from __future__ import annotations
 
 import hashlib
+import copy
 import json
 import os
 import sqlite3
@@ -24,6 +26,8 @@ REASONS = {"missing_client_info", "contradictory_requirements", "model_error", "
 STAGE_IDS = {stage[0] for stage in STAGES}
 MAX_INPUT = 12000
 MAX_ANSWER = 2000
+MAX_ERD_BYTES = 2 * 1024 * 1024
+BUSY_STATES = {'EXTRACTING', 'REVIEWING', 'COLLECTING_REFERENCE', 'DESIGNING_ERD'}
 
 
 def _digest(value):
@@ -82,12 +86,13 @@ def _text(value, limit, required=True):
 
 
 class DeliveryWorkspace:
-    def __init__(self, path=None, extract=None, review=None, collect=None):
+    def __init__(self, path=None, extract=None, review=None, collect=None, generate_erd=None):
         from .codex_intake import extract_requirements
         from .jev_review import review_requirements
         self.extract = extract or extract_requirements
         self.review = review or review_requirements
         self.collect = collect
+        self._generate_erd = generate_erd
         root = Path(os.environ.get("CHANNELSHIFT_HOME", Path.home() / ".channelshift"))
         self.path = Path(path) if path is not None else root / "delivery.sqlite3"
         self.path.parent.mkdir(parents=True, exist_ok=True)
@@ -210,6 +215,13 @@ class DeliveryWorkspace:
         jobs = [event for event in events if event['kind'] == 'job_started']
         context = {key: result[key] for key in ('id', 'source', 'state', 'candidate', 'jev',
                                                'answer_context_digest', 'consent_revision')}
+        erd_events = [event for event in events if event['kind'] in
+                      {'erd_started', 'erd_recorded', 'erd_failed', 'erd_edited'}]
+        if result['state'] == 'DESIGNING_ERD' and erd_events and erd_events[-1]['kind'] == 'erd_started':
+            # Designing a schema does not change the reviewed client evidence.
+            # Consent/answer revisions remain in the context and still invalidate
+            # the draft if they change during an external generation request.
+            context['state'] = erd_events[-1]['payload']['previous_state']
         context['job_id'] = jobs[-1]['payload']['job_id'] if jobs else None
         context['format'] = 'channelshift.intervention-revision/v1'
         # The review snapshot binds the evidence. The write revision additionally
@@ -224,6 +236,14 @@ class DeliveryWorkspace:
                              and last_navigation['payload']['review_context_revision'] == result['review_context_revision'])
         result['workflow_stage'] = 'requirements_review' if active_review else 'intake'
         result['requirements_review'] = result['review_history'][-1] if active_review else None
+        erd_versions = [event for event in erd_events if event['kind'] in {'erd_recorded', 'erd_edited'}]
+        latest_erd = erd_versions[-1] if erd_versions else None
+        result['erd_current'] = bool(latest_erd and active_review and
+            latest_erd['payload']['review_context_revision'] == result['review_context_revision'])
+        result['erd_history'] = [dict(event['payload'], created_at=event['created_at'],
+                                    stale=not (result['erd_current'] and event is latest_erd))
+                                 for event in erd_versions]
+        result['erd_draft'] = result['erd_history'][-1] if result['erd_history'] else None
         if last_navigation:
             context['workflow_sequence'] = last_navigation['sequence']
         reference_events = [event for event in events if event['kind'] in
@@ -232,6 +252,8 @@ class DeliveryWorkspace:
             # A retry of an old collection request must not launch another paid
             # call. Keep this out of the client-evidence review snapshot.
             context['reference_sequence'] = reference_events[-1]['sequence']
+        if erd_events:
+            context['erd_sequence'] = erd_events[-1]['sequence']
         result['intervention_revision'] = _digest(context)
         return result
 
@@ -244,7 +266,7 @@ class DeliveryWorkspace:
             current = self._get(db, project_id)
             if expected_revision != current['intervention_revision']:
                 raise ValueError('delivery_revision_conflict')
-            if current['state'] in {'EXTRACTING', 'REVIEWING', 'COLLECTING_REFERENCE'}:
+            if current['state'] in BUSY_STATES:
                 raise ValueError('delivery_busy')
             if not current['candidate']:
                 raise ValueError('delivery_candidate_required')
@@ -277,7 +299,7 @@ class DeliveryWorkspace:
             current = self._get(db, project_id)
             if expected_revision != current['intervention_revision']:
                 raise ValueError('delivery_revision_conflict')
-            if current['state'] in {'EXTRACTING', 'REVIEWING', 'COLLECTING_REFERENCE'}:
+            if current['state'] in BUSY_STATES:
                 raise ValueError('delivery_busy')
             if len(current['events']) >= 1000:
                 raise ValueError('delivery_storage_limit')
@@ -328,7 +350,7 @@ class DeliveryWorkspace:
                              if item['question_id'] == question_id and item['question_digest'] == question_digest), None)
             if selected is None or selected['answer_revision'] != expected_revision:
                 raise ValueError('delivery_revision_conflict')
-            if current['state'] in {'EXTRACTING', 'REVIEWING', 'COLLECTING_REFERENCE'}:
+            if current['state'] in BUSY_STATES:
                 raise ValueError('delivery_busy')
             if len(current['events']) >= 1000:
                 raise ValueError('delivery_storage_limit')
@@ -396,7 +418,7 @@ class DeliveryWorkspace:
                 raise ValueError('delivery_busy')
             with self._connect() as db:
                 db.execute('BEGIN IMMEDIATE')
-                if db.execute("SELECT 1 FROM projects WHERE state IN ('EXTRACTING','REVIEWING','COLLECTING_REFERENCE') LIMIT 1").fetchone():
+                if db.execute("SELECT 1 FROM projects WHERE state IN ('EXTRACTING','REVIEWING','COLLECTING_REFERENCE','DESIGNING_ERD') LIMIT 1").fetchone():
                     raise ValueError('delivery_recovery_required')
                 project = self._get(db, project_id)
                 if operation == 'jev' and not project['candidate']:
@@ -429,7 +451,7 @@ class DeliveryWorkspace:
                 raise ValueError('delivery_busy')
             with self._connect() as db:
                 db.execute('BEGIN IMMEDIATE')
-                if db.execute("SELECT 1 FROM projects WHERE state IN ('EXTRACTING','REVIEWING','COLLECTING_REFERENCE') LIMIT 1").fetchone():
+                if db.execute("SELECT 1 FROM projects WHERE state IN ('EXTRACTING','REVIEWING','COLLECTING_REFERENCE','DESIGNING_ERD') LIMIT 1").fetchone():
                     raise ValueError('delivery_recovery_required')
                 project = self._get(db, project_id)
                 if project['intervention_revision'] != expected_revision:
@@ -442,6 +464,124 @@ class DeliveryWorkspace:
             self._active = True
             self._jobs.submit(self._run_reference, project, url, job_id)
         return self.get(project_id)
+
+    def generate_erd(self, project_id, database, expected_revision):
+        """Queue a schema draft from a frozen, current requirements review."""
+        if type(database) is not str or database not in {'postgresql', 'mysql', 'sqlite'} or not _hex_digest(expected_revision):
+            raise ValueError('invalid_delivery_input')
+        with self._lock:
+            if self._active:
+                raise ValueError('delivery_busy')
+            with self._connect() as db:
+                db.execute('BEGIN IMMEDIATE')
+                if db.execute("SELECT 1 FROM projects WHERE state IN ('EXTRACTING','REVIEWING','COLLECTING_REFERENCE','DESIGNING_ERD') LIMIT 1").fetchone():
+                    raise ValueError('delivery_recovery_required')
+                project = self._get(db, project_id)
+                if project['intervention_revision'] != expected_revision:
+                    raise ValueError('delivery_revision_conflict')
+                if project['answer_summary']['blocking_unanswered']:
+                    raise ValueError('delivery_answers_required')
+                if not project['requirements_review']:
+                    raise ValueError('delivery_review_required')
+                if not any(row.get('origin') == 'client' for row in project['requirements_review']['candidate']['requirements']):
+                    raise ValueError('delivery_client_requirements_required')
+                if len(project['events']) >= 990:
+                    raise ValueError('delivery_storage_limit')
+                snapshot = copy.deepcopy(project['requirements_review'])
+                snapshot['name'] = project['name']
+                job_id = uuid.uuid4().hex
+                db.execute("UPDATE projects SET state='DESIGNING_ERD' WHERE id=?", (project_id,))
+                self._event(db, project_id, 'erd_started', {
+                    'job_id': job_id, 'database': database, 'previous_state': project['state'],
+                    'input_snapshot': snapshot, 'review_context_revision': project['review_context_revision'],
+                    'approval_granted': False, 'database_executed': False})
+            self._active = True
+            self._jobs.submit(self._run_erd, project, snapshot, database, job_id)
+        return self.get(project_id)
+
+    def _run_erd(self, project, snapshot, database, job_id):
+        started = time.monotonic()
+        try:
+            from .codex_erd import generate_erd, validate_erd
+            callback = self._generate_erd or generate_erd
+            # The provider receives a copy so even an injected callback cannot
+            # mutate the evidence against which its output is validated.
+            result = validate_erd(callback(copy.deepcopy(snapshot), database), snapshot, database)
+            encoded = json.dumps(result, ensure_ascii=False, allow_nan=False)
+            if len(encoded.encode('utf-8')) > MAX_ERD_BYTES:
+                raise ValueError('oversized_erd_result')
+            result = json.loads(encoded)
+            payload = {'id': job_id, 'job_id': job_id, 'generation_id': job_id,
+                       'database': database, 'result': result, 'digest': _digest(result),
+                       'review_context_revision': project['review_context_revision'],
+                       'candidate_revision': project['candidate_revision'],
+                       'source_digest': project['source']['digest'],
+                       'answer_context_digest': project['answer_context_digest'],
+                       'consent_revision': project['consent_revision'],
+                       'traceability_current': True, 'approval_granted': False,
+                       'database_executed': False,
+                       'previous_revision': project['erd_draft']['revision'] if project['erd_draft'] else None,
+                       'elapsed_ms': round((time.monotonic() - started) * 1000)}
+            payload['revision'] = _digest(payload)
+            kind = 'erd_recorded'
+        except Exception as error:
+            from .codex_intake import CodexIntakeError, SAFE_ERROR_CODES as CODEX_CODES
+            from .member_codex import MemberCodexError, SAFE_ERROR_CODES as MEMBER_CODES
+            from .shared_services import ServiceError, SAFE_ERROR_CODES as SERVICE_CODES
+            allowed = CODEX_CODES | MEMBER_CODES | SERVICE_CODES | {'invalid_erd_input', 'codex_invalid_erd_output'}
+            code = str(error) if isinstance(error, (CodexIntakeError, MemberCodexError, ServiceError)) and str(error) in allowed else 'delivery_job_failed'
+            payload = {'job_id': job_id, 'code': code, 'database': database,
+                       'review_context_revision': project['review_context_revision'],
+                       'approval_granted': False, 'database_executed': False,
+                       'elapsed_ms': round((time.monotonic() - started) * 1000)}
+            kind = 'erd_failed'
+        try:
+            with self._connect() as db:
+                db.execute('BEGIN IMMEDIATE')
+                db.execute('UPDATE projects SET state=? WHERE id=?', (project['state'], project['id']))
+                self._event(db, project['id'], kind, payload)
+        finally:
+            with self._lock:
+                self._active = False
+
+    def save_erd(self, project_id, schema, expected_revision):
+        """Save a manual schema revision without reasserting generated mappings."""
+        from .core import validate_schema
+        if not _hex_digest(expected_revision):
+            raise ValueError('invalid_delivery_input')
+        if not validate_schema(schema)['valid']:
+            raise ValueError('invalid_schema')
+        schema = copy.deepcopy(schema)
+        with self._connect() as db:
+            db.execute('BEGIN IMMEDIATE')
+            project = self._get(db, project_id)
+            if project['state'] in BUSY_STATES:
+                raise ValueError('delivery_busy')
+            draft = project['erd_draft']
+            if not draft:
+                raise ValueError('delivery_erd_required')
+            if draft['revision'] != expected_revision:
+                raise ValueError('delivery_revision_conflict')
+            if not project['erd_current']:
+                raise ValueError('delivery_erd_stale')
+            if schema == draft['result']['schema']:
+                return project
+            if len(project['events']) >= 1000:
+                raise ValueError('delivery_storage_limit')
+            result = copy.deepcopy(draft['result'])
+            result['schema'] = schema
+            if len(json.dumps(result, ensure_ascii=False, allow_nan=False).encode('utf-8')) > MAX_ERD_BYTES:
+                raise ValueError('invalid_schema')
+            payload = {key: draft[key] for key in ('generation_id', 'review_context_revision',
+                'candidate_revision', 'source_digest', 'answer_context_digest', 'consent_revision')}
+            payload.update({'id': uuid.uuid4().hex, 'database': schema['database'],
+                            'result': result, 'digest': _digest(result),
+                            'previous_revision': expected_revision, 'actor_type': 'local_operator',
+                            'traceability_current': False, 'approval_granted': False,
+                            'database_executed': False})
+            payload['revision'] = _digest(payload)
+            self._event(db, project_id, 'erd_edited', payload)
+            return self._get(db, project_id)
 
     def _run_reference(self, project, url, job_id):
         from .shared_services import ServiceError, SAFE_ERROR_CODES as SERVICE_CODES

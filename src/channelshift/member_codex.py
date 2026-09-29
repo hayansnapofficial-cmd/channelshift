@@ -463,6 +463,18 @@ class MemberCodex:
                 raise MemberCodexError("codex_authentication_required")
             return codex_intake.extract_requirements(client_request, codex_home=home)
 
+    def generate_erd(self, user_id, review_snapshot, database):
+        from .codex_erd import generate_erd
+        with self._user_lock(user_id):
+            home = self._home(user_id)
+            with self.lock:
+                item = self.connections.get(user_id)
+                if self.closed or (item and not item.done.is_set()):
+                    raise MemberCodexError("codex_connection_busy")
+            if not (home / "auth.json").exists():
+                raise MemberCodexError("codex_authentication_required")
+            return generate_erd(review_snapshot, database, codex_home=home)
+
     def close(self):
         with self.lock:
             self.closed = True

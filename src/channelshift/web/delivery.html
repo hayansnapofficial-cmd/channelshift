@@ -99,6 +99,17 @@
           <p id="review-saved-at" class="field-help"></p>
           <div class="candidate-columns"><div><h3>고객 요구사항</h3><div id="review-client-requirements" class="result-list"></div></div><div><h3>내부 제안</h3><div id="review-internal-requirements" class="result-list"></div></div></div>
           <div class="candidate-columns"><div><h3>저장한 답변</h3><div id="review-answers" class="result-list"></div></div><div><h3>제외 항목</h3><div id="review-out-of-scope" class="result-list"></div></div></div>
+          <div class="erd-action">
+            <div class="section-head"><h3>ERD·DB 초안</h3><span id="erd-draft-status" class="muted small">생성 전</span></div>
+            <p class="field-help">저장한 요구사항 검수 내용을 내 Codex로 보내 테이블과 관계를 정리합니다. 내 계정 한도를 사용합니다.</p>
+            <div class="erd-create-controls"><div><label for="erd-database">데이터베이스</label><select id="erd-database"><option value="postgresql">PostgreSQL</option><option value="mysql">MySQL</option><option value="sqlite">SQLite</option></select></div><button id="create-erd" class="button secondary" type="button" disabled>ERD 초안 만들기</button></div>
+            <p id="erd-help" class="field-help" aria-live="polite"></p>
+            <p id="erd-stale" class="answer-conflict field-help" hidden>요구사항이 변경되어 이전 초안을 현재 편집기로 열 수 없습니다. 검수 내용을 확인하고 새 초안을 만드세요.</p>
+            <p id="erd-no-data" class="field-help" hidden>저장할 데이터가 없는 초안입니다. 설계 근거를 확인하세요.</p>
+            <details id="erd-design-details" class="event-details erd-design-details" hidden><summary>설계 근거</summary><p id="erd-trace-status" class="field-help"></p><div id="erd-design-evidence" class="result-list"></div></details>
+            <a id="open-erd" class="button secondary" hidden>ERD·DB 편집 열기</a>
+            <p class="field-help">초안 생성과 저장은 실제 DB 실행이나 설계 승인을 수행하지 않습니다.</p>
+          </div>
           <div class="form-actions"><button id="back-to-intake" class="button secondary" type="button">접수로 돌아가기</button></div>
         </section>
 

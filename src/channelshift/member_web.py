@@ -62,6 +62,10 @@ def member_handler_factory(auth, root, token=None, *, codex=None, services=None)
         ensure_active(user_id)
         return codex.extract_requirements(user_id, text)
 
+    def generate_erd_for(user_id, snapshot, database):
+        ensure_active(user_id)
+        return codex.generate_erd(user_id, snapshot, database)
+
     def review_for(user_id, source, requirements):
         ensure_active(user_id)
         return services.review_for(user_id)(source, requirements)
@@ -86,7 +90,8 @@ def member_handler_factory(auth, root, token=None, *, codex=None, services=None)
                 delivery = DeliveryWorkspace(member_root / 'delivery.sqlite3',
                     extract=lambda text: extract_for(user_id, text),
                     review=lambda source, items: review_for(user_id, source, items),
-                    collect=lambda url: collect_for(user_id, url))
+                    collect=lambda url: collect_for(user_id, url),
+                    generate_erd=lambda snapshot, database: generate_erd_for(user_id, snapshot, database))
                 workspaces[user_id] = delivery
                 members[user_id] = handler_factory(ProjectStore(member_root / 'schemas'), token, delivery)
             return members[user_id]
@@ -231,8 +236,9 @@ def member_handler_factory(auth, root, token=None, *, codex=None, services=None)
                 except Exception as error:
                     self.connection_error(error)
                 return
-            if self.path in {'/', '/delivery', '/workbench'}:
-                name = {'/': 'index.html', '/delivery': 'delivery.html', '/workbench': 'workbench.html'}[self.path]
+            asset_path = self.path.split('?', 1)[0]
+            if asset_path in {'/', '/delivery', '/workbench'}:
+                name = {'/': 'index.html', '/delivery': 'delivery.html', '/workbench': 'workbench.html'}[asset_path]
                 payload = (WEB / name).read_text(encoding='utf-8')
                 payload = payload.replace('__CHANNELSHIFT_TOKEN__', token)
                 navigation = '<a class="text-button" href="/login">내 계정</a>'
@@ -269,7 +275,7 @@ def member_handler_factory(auth, root, token=None, *, codex=None, services=None)
             if self.path.startswith('/api/connections/mcp/'):
                 self.mcp_connection_post(user)
                 return
-            if self.path == '/api/delivery/extract':
+            if self.path in {'/api/delivery/extract', '/api/delivery/erd'}:
                 try:
                     connection = codex.status(user['id'])
                     if not connection['can_execute']:
