@@ -1,0 +1,42 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="channelshift-token" content="__CHANNELSHIFT_TOKEN__">
+  <meta name="color-scheme" content="light">
+  <meta name="referrer" content="no-referrer">
+  <title>ChannelShift · 회원 관리</title>
+  <link rel="icon" href="data:,">
+  <link rel="stylesheet" href="/admin.css">
+  <script src="/admin.js" defer></script>
+</head>
+<body>
+  <a class="skip-link" href="#main">회원 관리로 바로 가기</a>
+  <header class="app-header">
+    <a class="brand" href="/delivery" aria-label="ChannelShift 작업 공간"><span class="brand-mark" aria-hidden="true"><i></i><i></i><i></i></span><span>ChannelShift</span></a>
+    <nav aria-label="작업공간"><a href="/">DB 편집기</a><a href="/delivery">작업 공간</a><a href="/login">내 계정</a><a href="/admin" aria-current="page">회원 관리</a></nav>
+  </header>
+  <main id="main" tabindex="-1">
+    <div class="page-heading"><div><p class="eyebrow">마스터 계정</p><h1>회원 관리</h1><p class="description">가입 현황과 계정 상태를 확인합니다.</p></div><button id="refresh-overview" class="button secondary" type="button">새로고침</button></div>
+    <div id="message" class="message" role="status" aria-live="polite" hidden></div>
+    <p id="loading-status" class="loading-status" role="status">회원 정보를 불러오는 중입니다.</p>
+    <section id="access-denied" class="access-denied" aria-labelledby="access-title" hidden><h2 id="access-title">관리자 권한이 필요합니다</h2><p>마스터 계정으로 로그인한 뒤 다시 열어 주세요.</p><a class="button secondary" href="/login">내 계정으로 이동</a></section>
+    <div id="admin-content" hidden>
+      <section class="summary" aria-label="가입 현황"><div><span>전체 계정</span><strong id="count-total">0</strong></div><div><span>이메일 인증</span><strong id="count-verified">0</strong></div><div><span>이메일 미인증</span><strong id="count-pending">0</strong></div><div><span>이용 정지</span><strong id="count-disabled">0</strong></div></section>
+      <section class="work-section" aria-labelledby="members-title">
+        <div class="section-head"><h2 id="members-title">계정 목록</h2><p id="member-count" class="muted small"></p></div>
+        <div class="search-field"><label for="member-search">계정 찾기</label><input id="member-search" type="search" autocomplete="off" placeholder="아이디 또는 이메일" maxlength="320"></div>
+        <p id="members-empty" class="empty-state" hidden>표시할 계정이 없습니다.</p>
+        <div id="members-table-wrap" class="table-wrap" role="region" aria-label="계정 목록" tabindex="0"><table><caption class="sr-only">가입 계정의 권한, 인증 여부, 이용 상태 및 가입일</caption><thead><tr><th scope="col">계정</th><th scope="col">권한</th><th scope="col">인증</th><th scope="col">이용 상태</th><th scope="col">가입일</th><th scope="col">관리</th></tr></thead><tbody id="member-rows"></tbody></table></div>
+        <section id="member-action" class="member-action" aria-labelledby="action-title" hidden>
+          <h3 id="action-title"></h3><p id="action-description" class="description"></p>
+          <form id="member-status-form"><label for="action-reason">변경 사유 <span class="muted">필수 · 최대 500자</span></label><textarea id="action-reason" name="reason" rows="3" required aria-describedby="reason-help"></textarea><p id="reason-help" class="field-help">사유는 관리자 변경 이력에 남습니다.</p><div class="form-actions"><button id="apply-status" class="button primary" type="submit"></button><button id="cancel-status" class="button secondary" type="button">취소</button></div></form>
+        </section>
+      </section>
+      <section class="work-section audit-section" aria-labelledby="audit-title"><div class="section-head"><h2 id="audit-title">관리자 변경 이력</h2><p class="muted small">최근 기록</p></div><p id="audit-empty" class="empty-state" hidden>아직 변경 이력이 없습니다.</p><div id="audit-table-wrap" class="table-wrap" role="region" aria-label="관리자 변경 이력" tabindex="0"><table class="audit-table"><caption class="sr-only">관리자가 변경한 시각, 계정, 작업, 대상 및 사유</caption><thead><tr><th scope="col">시각</th><th scope="col">관리자</th><th scope="col">작업</th><th scope="col">대상</th><th scope="col">사유</th></tr></thead><tbody id="audit-rows"></tbody></table></div></section>
+    </div>
+    <noscript><p class="message error">회원 관리를 사용하려면 브라우저에서 JavaScript를 사용해야 합니다.</p></noscript>
+  </main>
+</body>
+</html>

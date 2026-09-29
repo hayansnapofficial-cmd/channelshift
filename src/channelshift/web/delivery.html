@@ -1,0 +1,143 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="channelshift-token" content="__CHANNELSHIFT_TOKEN__">
+  <meta name="color-scheme" content="light">
+  <title>ChannelShift · 요구사항 접수</title>
+  <link rel="icon" href="data:,">
+  <link rel="stylesheet" href="/delivery.css">
+  <script src="/delivery.js" defer></script>
+</head>
+<body>
+  <a class="skip-link" href="#main">작업 화면으로 바로 가기</a>
+  <header class="app-header">
+    <a class="brand" href="/" aria-label="ChannelShift 홈"><span class="brand-mark" aria-hidden="true"><i></i><i></i><i></i></span><span>ChannelShift</span></a>
+    <nav aria-label="작업공간"><a href="/">ERD·DB</a><a href="/delivery" aria-current="page">요구사항</a><a href="/workbench#backend">API·백엔드</a><a href="/workbench#security">보안 검수</a><a href="/workbench#seo">SEO·공유 설정</a><a href="/workbench#delivery">납품 검수</a></nav>
+  </header>
+  <div class="layout">
+    <aside class="sidebar" aria-label="접수한 프로젝트">
+      <button id="new-project" class="button primary full" type="button">새 요청</button>
+      <div class="section-head"><h2>프로젝트</h2><button id="refresh-projects" class="text-button" type="button">새로고침</button></div>
+      <p id="project-list-status" class="muted small" role="status">불러오는 중</p>
+      <div id="project-list" class="project-list"></div>
+    </aside>
+    <main id="main" tabindex="-1">
+      <div class="page-heading"><h1>요구사항</h1></div>
+      <div id="message" class="message" role="status" aria-live="polite" hidden></div>
+      <section class="connections" aria-labelledby="connection-title">
+        <div class="section-head"><h2 id="connection-title">연결</h2><button id="refresh-status" class="text-button" type="button">새로고침</button></div>
+        <div class="personal-connection">
+          <div class="connection-summary"><p><strong>내 Codex</strong><span id="codex-status" role="status">확인 중</span></p><div id="codex-connection-actions" class="connection-actions" hidden><button id="connect-codex" class="button secondary" type="button">내 Codex 연결</button><button id="disconnect-codex" class="text-button" type="button" hidden>연결 해제</button></div></div>
+          <p id="codex-help" class="field-help">내 계정의 연결 상태를 확인합니다.</p>
+          <div id="codex-login" class="codex-login" aria-live="polite" hidden>
+            <p id="codex-login-instruction">공식 로그인 화면에서 아래 코드를 입력하세요.</p>
+            <div class="login-action"><code id="codex-login-code"></code><a id="codex-login-link" class="button primary" target="_blank" rel="noopener noreferrer">공식 로그인 열기</a><button id="cancel-codex-login" class="text-button" type="button">연결 취소</button></div>
+            <p id="codex-login-help" class="field-help">로그인을 마치면 연결 상태가 자동으로 갱신됩니다.</p>
+          </div>
+          <p id="codex-connection-message" class="field-help" role="status" aria-live="polite" hidden></p>
+        </div>
+        <div class="connection-lines"><p><strong>요구사항 검토</strong><span id="jev-status">확인 중</span></p><p><strong>참고 자료 수집</strong><span id="references-status">확인 중</span></p></div>
+        <p class="field-help">검토와 자료 수집은 서비스 공용 연결을 사용합니다.</p>
+        <details id="mcp-connection-panel" class="mcp-connection" hidden>
+          <summary>MCP 연결 <span id="mcp-status" class="muted">확인 중</span></summary>
+          <p class="field-help">내 AI 도구에서 요구사항 검토와 참고 자료 수집을 사용합니다. AI 실행은 내 도구의 계정을 사용합니다.</p>
+          <div class="connection-actions mcp-actions"><button id="create-mcp-token" class="button secondary" type="button">연결 키 발급</button><button id="revoke-mcp-token" class="text-button" type="button" hidden>연결 해제</button></div>
+          <p class="field-help">새 키를 발급하면 이전 연결 키는 사용할 수 없습니다.</p>
+          <div id="mcp-token-panel" hidden>
+            <label for="mcp-token">이번에 발급한 연결 키</label>
+            <input id="mcp-token" type="password" readonly autocomplete="off" spellcheck="false" aria-describedby="mcp-token-help">
+            <div class="connection-actions mcp-token-actions"><button id="reveal-mcp-token" class="text-button" type="button" aria-pressed="false">키 보기</button><button id="copy-mcp-token" class="text-button" type="button">키 복사</button><button id="save-mcp-token" class="button secondary" type="button">키 파일 저장</button></div>
+            <p id="mcp-token-help" class="field-help">키는 지금만 확인할 수 있습니다. 이 항목을 닫거나 페이지를 떠나기 전에 저장하세요.</p>
+          </div>
+          <p id="mcp-message" class="field-help" role="status" aria-live="polite" hidden></p>
+          <details class="mcp-config"><summary>내 AI 도구에 연결하기</summary><p class="field-help">MCP 실행 환경에 아래 값을 설정하세요. 키 파일 경로는 저장한 파일의 전체 경로로 바꾸세요.</p><pre id="mcp-config-example"></pre></details>
+        </details>
+      </section>
+
+      <section id="intake-panel" class="work-section" aria-label="새 요청">
+        <form id="intake-form">
+          <label for="client-request">고객 원문 <span class="required">필수</span></label>
+          <textarea id="client-request" name="client_request" rows="9" required placeholder="고객 요청을 붙여 넣으세요."></textarea>
+          <label for="project-name">프로젝트명 <span class="required">필수</span></label>
+          <input id="project-name" name="name" maxlength="200" required autocomplete="off" placeholder="예: 고객사 홈페이지">
+          <div class="form-actions"><button id="create-project" class="button primary" type="submit">저장</button></div>
+        </form>
+      </section>
+
+      <div id="project-panel" hidden>
+        <section class="work-section" aria-labelledby="selected-name">
+          <div class="section-head"><h2 id="selected-name"></h2><span id="project-state" class="state-label"></span></div>
+          <details class="source-details" open><summary>고객 원문</summary><pre id="source-text" class="source-text"></pre></details>
+          <div id="intake-extraction" class="model-action"><p>Codex · 원문·저장된 답변 전송 · 내 계정 한도</p><button id="extract" class="button primary" type="button" disabled>Codex로 정리</button></div>
+        </section>
+
+        <section id="candidate-panel" class="work-section" aria-labelledby="candidate-title" hidden>
+          <div class="section-head"><h2 id="candidate-title">요구사항 초안</h2><span class="muted small">고객 확인 전</span></div>
+          <div class="candidate-columns"><div><h3>고객 요구사항</h3><div id="client-requirements" class="result-list"></div></div><div><h3>내부 제안</h3><div id="internal-requirements" class="result-list"></div></div></div>
+          <div class="candidate-columns secondary-results"><div><h3>확인할 질문</h3><p id="answer-summary" class="muted small" aria-live="polite"></p><div id="questions" class="result-list"></div><details class="event-details"><summary>답변 이력</summary><div id="answer-history" class="history-list"></div></details></div><div><h3>제외 항목</h3><div id="out-of-scope" class="result-list"></div></div></div>
+          <div class="next-step-actions"><p id="next-step-help" class="field-help" aria-live="polite"></p><button id="next-step" class="button primary" type="button" aria-describedby="next-step-help" disabled>저장하고 요구사항 검수</button></div>
+          <div class="model-action"><p>검토 요청 시 초안 생성에 사용한 원문·답변과 초안을 외부 검토 서비스로 전송합니다.</p><button id="review-jev" class="button secondary" type="button" disabled>요구사항 검토</button></div>
+          <div id="jev-results" class="result-list" aria-live="polite"></div>
+        </section>
+
+        <section class="work-section" aria-labelledby="references-title">
+          <div class="section-head"><h2 id="references-title">참고 자료</h2><span id="reference-count" class="muted small">0개</span></div>
+          <p class="section-description">프로젝트에서 참고할 공개 페이지를 저장하세요.</p>
+          <form id="reference-form">
+            <label for="reference-url">페이지 주소</label>
+            <div class="reference-input"><input id="reference-url" name="url" type="url" maxlength="2000" required placeholder="https://example.com" autocomplete="off" aria-describedby="reference-help"><button id="collect-reference" class="button secondary" type="submit" disabled>자료 가져오기</button></div>
+            <p id="reference-help" class="field-help">가져오기 요청 시 입력한 주소를 외부 수집 서비스로 전송하고, 수집 결과를 이 프로젝트에 저장합니다.</p>
+          </form>
+          <div id="reference-results" class="result-list" aria-live="polite"></div>
+        </section>
+
+        <section id="requirements-review-panel" class="work-section" aria-labelledby="requirements-review-title" hidden>
+          <div class="section-head"><h2 id="requirements-review-title" tabindex="-1">요구사항 검수</h2><span class="state-label">검수 중</span></div>
+          <p class="section-description">저장한 요구사항과 답변을 함께 확인하세요. 수정할 내용이 있으면 접수로 돌아가세요.</p>
+          <p id="review-saved-at" class="field-help"></p>
+          <div class="candidate-columns"><div><h3>고객 요구사항</h3><div id="review-client-requirements" class="result-list"></div></div><div><h3>내부 제안</h3><div id="review-internal-requirements" class="result-list"></div></div></div>
+          <div class="candidate-columns"><div><h3>저장한 답변</h3><div id="review-answers" class="result-list"></div></div><div><h3>제외 항목</h3><div id="review-out-of-scope" class="result-list"></div></div></div>
+          <div class="erd-action">
+            <div class="section-head"><h3>ERD·DB 초안</h3><span id="erd-draft-status" class="muted small">생성 전</span></div>
+            <p class="field-help">저장한 요구사항 검수 내용을 내 Codex로 보내 테이블과 관계를 정리합니다. 내 계정 한도를 사용합니다.</p>
+            <div class="erd-create-controls"><div><label for="erd-database">데이터베이스</label><select id="erd-database"><option value="postgresql">PostgreSQL</option><option value="mysql">MySQL</option><option value="sqlite">SQLite</option></select></div><button id="create-erd" class="button secondary" type="button" disabled>ERD 초안 만들기</button></div>
+            <p id="erd-help" class="field-help" aria-live="polite"></p>
+            <p id="erd-stale" class="answer-conflict field-help" hidden>요구사항이 변경되어 이전 초안을 현재 편집기로 열 수 없습니다. 검수 내용을 확인하고 새 초안을 만드세요.</p>
+            <p id="erd-no-data" class="field-help" hidden>저장할 데이터가 없는 초안입니다. 설계 근거를 확인하세요.</p>
+            <details id="erd-design-details" class="event-details erd-design-details" hidden><summary>설계 근거</summary><p id="erd-trace-status" class="field-help"></p><div id="erd-design-evidence" class="result-list"></div></details>
+            <a id="open-erd" class="button secondary" hidden>ERD·DB 편집 열기</a>
+            <p class="field-help">초안 생성과 저장은 실제 DB 실행이나 설계 승인을 수행하지 않습니다.</p>
+          </div>
+          <div class="form-actions"><button id="back-to-intake" class="button secondary" type="button">접수로 돌아가기</button></div>
+        </section>
+
+        <section class="work-section" aria-labelledby="consent-title">
+          <div class="section-head"><h2 id="consent-title">동의 화면</h2><span id="consent-current" class="state-label">미결정</span></div>
+          <p class="field-help">법·서비스 필수 동의는 별도 검수</p>
+          <form id="consent-form">
+            <div class="form-grid"><div><label for="consent-mode">사용 여부</label><select id="consent-mode" name="mode"><option value="undecided">미결정</option><option value="required">사용</option><option value="not_required">사용 안함</option></select></div><div><label for="consent-operator">선택자 표기 <span class="required">신원 인증 아님</span></label><input id="consent-operator" name="operator_label" required autocomplete="off"></div></div>
+            <label for="consent-reason">선택 이유 <span class="required">필수</span></label><textarea id="consent-reason" name="reason" rows="2" required></textarea>
+            <div id="consent-conflict" class="answer-conflict" hidden><p>다른 탭에서 설정이 변경되었습니다. 작성 중인 내용은 보존했습니다.</p><p id="consent-latest" class="saved-answer"></p><button id="consent-rebase" class="text-button" type="button">현재 설정 확인함</button></div>
+            <div class="form-actions"><button id="save-consent" class="button secondary" type="submit">설정 저장</button></div>
+          </form>
+          <details class="event-details"><summary>변경 이력</summary><div id="consent-history" class="history-list"></div></details>
+        </section>
+
+        <section class="work-section" aria-labelledby="intervention-title">
+          <h2 id="intervention-title">개입 기록</h2>
+          <form id="intervention-form">
+            <div class="form-grid"><div><label for="stage-id">단계</label><select id="stage-id" name="stage_id"><option value="intake">고객 원문 접수</option></select></div><div><label for="intervention-reason">이유</label><select id="intervention-reason" name="reason"><option value="missing_client_info">고객 정보 부족</option><option value="contradictory_requirements">요구사항 모순</option><option value="model_error">모델 오류</option><option value="nonstandard_request">표준 밖 요청</option><option value="access_approval">권한·승인 확인</option><option value="quality_issue">품질 문제</option><option value="other">기타</option></select></div></div>
+            <label for="intervention-note">상황과 확인 내용 <span class="required">필수</span></label><textarea id="intervention-note" name="note" rows="3" maxlength="2000" required></textarea>
+            <div class="form-grid"><div><label for="intervention-decision">결정·다음 행동 <span class="required">필수</span></label><textarea id="intervention-decision" name="decision" rows="2" maxlength="2000" required></textarea></div><div><label for="intervention-outcome">결과·남은 문제</label><textarea id="intervention-outcome" name="outcome" rows="2" maxlength="2000"></textarea></div></div>
+            <div class="form-actions"><button id="save-intervention" class="button secondary" type="submit">개입 기록 저장</button></div>
+          </form>
+          <div id="interventions" class="history-list"></div>
+        </section>
+        <details class="work-section event-details"><summary>작업 이력</summary><div id="events" class="history-list"></div></details>
+      </div>
+    </main>
+  </div>
+</body>
+</html>

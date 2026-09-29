@@ -1,0 +1,16 @@
+{
+  "format": "channelshift.delivery-brief/v1",
+  "project_name": "샘플 회사 홈페이지",
+  "goal": "회사와 작업 사례를 소개하고 문의를 접수해 관리자가 처리한다.",
+  "client_request": "회사를 소개하고 포트폴리오를 보여주는 홈페이지가 필요합니다. 고객이 문의를 남기면 관리자만 로그인해서 조회하고 처리 상태를 바꿀 수 있게 해 주세요. 모바일에서도 읽기 편한 밝은 디자인을 원합니다.",
+  "inputs": {
+    "company_copy": "",
+    "portfolio_assets": "",
+    "contact_details": "",
+    "inquiry_fields": "",
+    "inquiry_retention": "",
+    "admin_access": "",
+    "brand_direction": "밝은 배경, 읽기 쉬운 문구, 모바일 대응",
+    "delivery_owner": ""
+  }
+}

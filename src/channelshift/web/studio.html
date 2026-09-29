@@ -1,0 +1,70 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="channelshift-token" content="__CHANNELSHIFT_TOKEN__">
+  <meta name="color-scheme" content="light">
+  <title>ChannelShift · 프로젝트</title>
+  <link rel="icon" href="data:,">
+  <link rel="stylesheet" href="/studio.css">
+  <script type="module" src="/studio.js"></script>
+</head>
+<body>
+  <a class="skip-link" href="#workspace">작업 화면으로 바로 가기</a>
+  <header class="app-header">
+    <a class="brand" href="/studio">ChannelShift</a>
+    <span id="header-project" class="header-project">새 프로젝트</span>
+    <button id="account-open" class="account-button" type="button">내 계정 <svg viewBox="0 0 20 20" aria-hidden="true"><path d="m5 7 5 5 5-5"/></svg></button>
+  </header>
+  <div class="app-layout">
+    <aside class="project-rail" aria-label="프로젝트 목록">
+      <h2>프로젝트</h2>
+      <button id="new-project" class="button secondary new-project" type="button"><svg viewBox="0 0 20 20" aria-hidden="true"><path d="M10 4v12M4 10h12"/></svg>새 프로젝트</button>
+      <p id="projects-status" class="field-help" role="status">불러오는 중…</p>
+      <div id="project-list" class="project-list"></div>
+    </aside>
+    <main id="workspace" class="workspace" tabindex="-1">
+      <nav class="pipeline" aria-label="제작 순서"><ol id="pipeline-steps"></ol></nav>
+      <div id="notice" class="notice" role="status" aria-live="polite" hidden></div>
+      <div class="reading-column">
+        <section id="new-project-panel" class="stage-content" hidden>
+          <h1>어떤 사이트를 만들까요?</h1>
+          <p class="intro">만들고 싶은 것을 적으면 Codex가 필요한 질문부터 정리합니다.</p>
+          <form id="new-project-form" class="flow-form">
+            <label for="project-request">만들고 싶은 것</label>
+            <textarea id="project-request" name="client_request" rows="7" maxlength="12000" placeholder="누가 사용하는지, 무엇을 할 수 있으면 좋을지 자유롭게 적어 주세요." required></textarea>
+            <div class="field-row"><div><label for="project-name">프로젝트 이름</label><input id="project-name" name="name" maxlength="200" autocomplete="off" required></div><div><label for="site-type">사이트 유형</label><select id="site-type" name="site_type"><option value="service">서비스</option><option value="sales">판매</option><option value="saas">SaaS</option></select></div></div>
+            <div class="action-row"><button id="create-project" class="button primary" type="submit">프로젝트 시작<svg viewBox="0 0 20 20" aria-hidden="true"><path d="M3 10h13m-5-5 5 5-5 5"/></svg></button><span class="field-help">원문을 저장한 뒤 내 Codex로 정리합니다.</span></div>
+          </form>
+        </section>
+        <section id="requirements-panel" class="stage-content" hidden>
+          <h1 id="requirements-heading">요구사항 정리</h1>
+          <p class="intro">만들고 싶은 것을 적고, 필요한 질문에 답하세요.</p>
+          <details id="source-details" class="source-details" open><summary>처음 요청</summary><p id="source-text" class="source-text"></p><div id="source-additions"></div></details>
+          <div id="requirements-work"></div>
+        </section>
+        <section id="artifact-panel" class="stage-content" hidden>
+          <h1 id="artifact-heading"></h1><p id="artifact-description" class="intro"></p>
+          <div id="artifact-work"></div>
+        </section>
+        <section id="obligations-wrap" class="obligations-wrap" hidden>
+          <details id="obligations-panel" class="obligations-panel">
+            <summary><strong>운영·정책</strong><span id="obligations-count">필수 7개 항목</span></summary>
+            <p class="field-help">판매·서비스·SaaS 사이트에 필요한 정보를 함께 확인합니다. 작성한 내용의 정확성과 적용 조건은 공개 전에 확인하세요.</p>
+            <form id="obligations-form"><div id="obligations-fields"></div><div class="action-row"><button id="save-obligations" class="button secondary" type="submit">운영·정책 저장</button><span id="obligations-message" class="field-help" role="status"></span></div></form>
+          </details>
+          <p class="obligations-caption">판매·서비스·SaaS 사이트에 필요한 정보를 함께 확인합니다.</p>
+        </section>
+        <details id="history-panel" class="compact-details" hidden><summary>작업 기록</summary><div id="pipeline-history"></div></details>
+      </div>
+    </main>
+  </div>
+  <dialog id="account-dialog" class="account-dialog" aria-labelledby="account-heading">
+    <div class="dialog-heading"><h2 id="account-heading">내 계정</h2><button id="account-close" class="text-button" type="button">닫기</button></div>
+    <div class="connection-section"><div class="connection-line"><h3>내 Codex</h3><span id="codex-status" class="field-help">확인 중</span></div><p class="field-help">내 계정으로 연결하고, 요청한 작업에 내 이용 한도를 사용합니다.</p><div class="action-row"><button id="connect-codex" class="button secondary" type="button">내 Codex 연결</button><button id="disconnect-codex" class="text-button" type="button" hidden>연결 해제</button><button id="refresh-codex" class="text-button" type="button">상태 확인</button></div><div id="codex-login" class="login-details" hidden><p>공식 로그인 화면에서 코드를 입력하세요.</p><code id="codex-login-code"></code><div class="action-row"><a id="codex-login-link" class="button secondary" target="_blank" rel="noopener noreferrer">공식 로그인 열기</a><button id="cancel-codex" class="text-button" type="button">연결 취소</button></div></div><p id="account-message" class="field-help" role="status" aria-live="polite"></p></div>
+    <details id="mcp-panel" class="connection-section"><summary>MCP 연결 <span id="mcp-status" class="field-help"></span></summary><p class="field-help">내 AI 도구에서 요구사항 검토와 참고 자료 수집을 사용합니다. 새 키를 발급하면 이전 키는 사용할 수 없습니다.</p><div class="action-row"><button id="create-mcp" class="button secondary" type="button">연결 키 발급</button><button id="revoke-mcp" class="text-button" type="button" hidden>연결 해제</button></div><div id="mcp-secret" hidden><label for="mcp-token">이번에 발급한 연결 키</label><input id="mcp-token" type="password" readonly autocomplete="off" spellcheck="false"><div class="action-row"><button id="reveal-mcp" class="text-button" type="button" aria-pressed="false">키 보기</button><button id="copy-mcp" class="text-button" type="button">키 복사</button><button id="save-mcp" class="text-button" type="button">키 파일 저장</button></div><p class="field-help">이 화면을 닫으면 키가 지워집니다. 필요한 곳에 안전하게 저장하세요.</p></div><p id="mcp-message" class="field-help" role="status"></p><details class="mcp-config"><summary>내 AI 도구에 연결하기</summary><pre id="mcp-config"></pre></details></details>
+    <button id="logout" class="text-button logout-button" type="button">로그아웃</button>
+  </dialog>
+</body>
+</html>

@@ -1,0 +1,182 @@
+{
+  "format": "channelshift.schema/v1",
+  "name": "예약 서비스 예시",
+  "database": "postgresql",
+  "entities": [
+    {
+      "name": "customers",
+      "description": "Customer contact records",
+      "attributes": [
+        {
+          "name": "id",
+          "type": "bigint",
+          "nullable": false,
+          "primary_key": true
+        },
+        {
+          "name": "display_name",
+          "type": "varchar",
+          "nullable": false,
+          "length": 120
+        },
+        {
+          "name": "email",
+          "type": "varchar",
+          "nullable": false,
+          "length": 254,
+          "unique": true
+        },
+        {
+          "name": "phone",
+          "type": "varchar",
+          "nullable": true,
+          "length": 40
+        },
+        {
+          "name": "created_at",
+          "type": "timestamp",
+          "nullable": false,
+          "default": {
+            "function": "current_timestamp"
+          }
+        }
+      ],
+      "indexes": []
+    },
+    {
+      "name": "services",
+      "description": "Bookable services",
+      "attributes": [
+        {
+          "name": "id",
+          "type": "bigint",
+          "nullable": false,
+          "primary_key": true
+        },
+        {
+          "name": "name",
+          "type": "varchar",
+          "nullable": false,
+          "length": 160
+        },
+        {
+          "name": "duration_minutes",
+          "type": "integer",
+          "nullable": false
+        },
+        {
+          "name": "price",
+          "type": "decimal",
+          "nullable": false,
+          "precision": 19,
+          "scale": 2
+        },
+        {
+          "name": "active",
+          "type": "boolean",
+          "nullable": false,
+          "default": true
+        }
+      ],
+      "indexes": []
+    },
+    {
+      "name": "bookings",
+      "description": "Scheduled service requests; capacity rules belong to the application",
+      "attributes": [
+        {
+          "name": "id",
+          "type": "bigint",
+          "nullable": false,
+          "primary_key": true
+        },
+        {
+          "name": "customer_id",
+          "type": "bigint",
+          "nullable": false
+        },
+        {
+          "name": "service_id",
+          "type": "bigint",
+          "nullable": false
+        },
+        {
+          "name": "starts_at",
+          "type": "timestamp",
+          "nullable": false
+        },
+        {
+          "name": "status",
+          "type": "varchar",
+          "nullable": false,
+          "length": 24,
+          "default": "requested"
+        },
+        {
+          "name": "notes",
+          "type": "text",
+          "nullable": true
+        },
+        {
+          "name": "created_at",
+          "type": "timestamp",
+          "nullable": false,
+          "default": {
+            "function": "current_timestamp"
+          }
+        }
+      ],
+      "indexes": [
+        {
+          "name": "idx_bookings_customer",
+          "columns": [
+            "customer_id"
+          ],
+          "unique": false
+        },
+        {
+          "name": "idx_bookings_service_start",
+          "columns": [
+            "service_id",
+            "starts_at"
+          ],
+          "unique": false
+        }
+      ]
+    }
+  ],
+  "relations": [
+    {
+      "name": "fk_bookings_customer",
+      "from": {
+        "entity": "bookings",
+        "columns": [
+          "customer_id"
+        ]
+      },
+      "to": {
+        "entity": "customers",
+        "columns": [
+          "id"
+        ]
+      },
+      "on_delete": "restrict"
+    },
+    {
+      "name": "fk_bookings_service",
+      "from": {
+        "entity": "bookings",
+        "columns": [
+          "service_id"
+        ]
+      },
+      "to": {
+        "entity": "services",
+        "columns": [
+          "id"
+        ]
+      },
+      "on_delete": "restrict"
+    }
+  ]
+}

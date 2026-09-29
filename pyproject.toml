@@ -4,17 +4,18 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "channelshift"
-version = "0.1.0"
-description = "Independent database starter templates, schema editor and MCP for application development"
+version = "0.2.0"
+description = "Requirements-led website production studio, database templates and MCP"
 readme = "README.md"
 requires-python = ">=3.10"
 license = "MIT"
-license-files = ["LICENSE", "THIRD_PARTY_NOTICES.md", "docs/dependency-licenses/**/*"]
-dependencies = ["mcp==2.2.0"]
+license-files = ["LICENSE", "THIRD_PARTY_NOTICES.md", "docs/dependency-licenses/**/*", "docs/service-dependency-licenses/**/*"]
+dependencies = ["mcp==2.2.0", "apify-client==2.5.1", "httpx==0.28.1"]
 
 [project.scripts]
 channelshift-mcp = "channelshift.mcp_server:main"
 channelshift-studio = "channelshift.web:main"
+channelshift-members = "channelshift.member_web:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]

@@ -1,0 +1,235 @@
+{
+  "format": "channelshift.traceability/v1",
+  "schema_digest": "43d64adc1fc0887e5a3978ed2a1f05ba3801507d8105b9d10e0cfeeaedda844e",
+  "covered_kinds": [
+    "api",
+    "backend",
+    "screen",
+    "test"
+  ],
+  "nodes": [
+    {
+      "id": "field:customers:email",
+      "kind": "field",
+      "label": "EXAMPLE: customers.email"
+    },
+    {
+      "id": "EXAMPLE-api-1",
+      "kind": "api",
+      "label": "SYNTHETIC EXAMPLE api 1"
+    },
+    {
+      "id": "EXAMPLE-api-2",
+      "kind": "api",
+      "label": "SYNTHETIC EXAMPLE api 2"
+    },
+    {
+      "id": "EXAMPLE-api-3",
+      "kind": "api",
+      "label": "SYNTHETIC EXAMPLE api 3"
+    },
+    {
+      "id": "EXAMPLE-api-4",
+      "kind": "api",
+      "label": "SYNTHETIC EXAMPLE api 4"
+    },
+    {
+      "id": "EXAMPLE-backend-1",
+      "kind": "backend",
+      "label": "SYNTHETIC EXAMPLE backend 1"
+    },
+    {
+      "id": "EXAMPLE-backend-2",
+      "kind": "backend",
+      "label": "SYNTHETIC EXAMPLE backend 2"
+    },
+    {
+      "id": "EXAMPLE-backend-3",
+      "kind": "backend",
+      "label": "SYNTHETIC EXAMPLE backend 3"
+    },
+    {
+      "id": "EXAMPLE-screen-1",
+      "kind": "screen",
+      "label": "SYNTHETIC EXAMPLE screen 1"
+    },
+    {
+      "id": "EXAMPLE-screen-2",
+      "kind": "screen",
+      "label": "SYNTHETIC EXAMPLE screen 2"
+    },
+    {
+      "id": "EXAMPLE-screen-3",
+      "kind": "screen",
+      "label": "SYNTHETIC EXAMPLE screen 3"
+    },
+    {
+      "id": "EXAMPLE-screen-4",
+      "kind": "screen",
+      "label": "SYNTHETIC EXAMPLE screen 4"
+    },
+    {
+      "id": "EXAMPLE-screen-5",
+      "kind": "screen",
+      "label": "SYNTHETIC EXAMPLE screen 5"
+    },
+    {
+      "id": "EXAMPLE-screen-6",
+      "kind": "screen",
+      "label": "SYNTHETIC EXAMPLE screen 6"
+    },
+    {
+      "id": "EXAMPLE-test-1",
+      "kind": "test",
+      "label": "SYNTHETIC EXAMPLE test 1"
+    },
+    {
+      "id": "EXAMPLE-test-2",
+      "kind": "test",
+      "label": "SYNTHETIC EXAMPLE test 2"
+    },
+    {
+      "id": "EXAMPLE-test-3",
+      "kind": "test",
+      "label": "SYNTHETIC EXAMPLE test 3"
+    },
+    {
+      "id": "EXAMPLE-test-4",
+      "kind": "test",
+      "label": "SYNTHETIC EXAMPLE test 4"
+    },
+    {
+      "id": "EXAMPLE-test-5",
+      "kind": "test",
+      "label": "SYNTHETIC EXAMPLE test 5"
+    },
+    {
+      "id": "EXAMPLE-test-6",
+      "kind": "test",
+      "label": "SYNTHETIC EXAMPLE test 6"
+    },
+    {
+      "id": "EXAMPLE-test-7",
+      "kind": "test",
+      "label": "SYNTHETIC EXAMPLE test 7"
+    },
+    {
+      "id": "EXAMPLE-test-8",
+      "kind": "test",
+      "label": "SYNTHETIC EXAMPLE test 8"
+    },
+    {
+      "id": "EXAMPLE-test-9",
+      "kind": "test",
+      "label": "SYNTHETIC EXAMPLE test 9"
+    },
+    {
+      "id": "EXAMPLE-test-10",
+      "kind": "test",
+      "label": "SYNTHETIC EXAMPLE test 10"
+    },
+    {
+      "id": "EXAMPLE-test-11",
+      "kind": "test",
+      "label": "SYNTHETIC EXAMPLE test 11"
+    }
+  ],
+  "edges": [
+    {
+      "from": "field:customers:email",
+      "to": "EXAMPLE-api-1"
+    },
+    {
+      "from": "field:customers:email",
+      "to": "EXAMPLE-api-2"
+    },
+    {
+      "from": "field:customers:email",
+      "to": "EXAMPLE-api-3"
+    },
+    {
+      "from": "field:customers:email",
+      "to": "EXAMPLE-api-4"
+    },
+    {
+      "from": "EXAMPLE-api-1",
+      "to": "EXAMPLE-backend-1"
+    },
+    {
+      "from": "EXAMPLE-api-1",
+      "to": "EXAMPLE-backend-2"
+    },
+    {
+      "from": "EXAMPLE-api-1",
+      "to": "EXAMPLE-backend-3"
+    },
+    {
+      "from": "EXAMPLE-backend-1",
+      "to": "EXAMPLE-screen-1"
+    },
+    {
+      "from": "EXAMPLE-backend-1",
+      "to": "EXAMPLE-screen-2"
+    },
+    {
+      "from": "EXAMPLE-backend-1",
+      "to": "EXAMPLE-screen-3"
+    },
+    {
+      "from": "EXAMPLE-backend-1",
+      "to": "EXAMPLE-screen-4"
+    },
+    {
+      "from": "EXAMPLE-backend-1",
+      "to": "EXAMPLE-screen-5"
+    },
+    {
+      "from": "EXAMPLE-backend-1",
+      "to": "EXAMPLE-screen-6"
+    },
+    {
+      "from": "EXAMPLE-api-2",
+      "to": "EXAMPLE-test-1"
+    },
+    {
+      "from": "EXAMPLE-api-2",
+      "to": "EXAMPLE-test-2"
+    },
+    {
+      "from": "EXAMPLE-api-2",
+      "to": "EXAMPLE-test-3"
+    },
+    {
+      "from": "EXAMPLE-api-2",
+      "to": "EXAMPLE-test-4"
+    },
+    {
+      "from": "EXAMPLE-api-2",
+      "to": "EXAMPLE-test-5"
+    },
+    {
+      "from": "EXAMPLE-api-2",
+      "to": "EXAMPLE-test-6"
+    },
+    {
+      "from": "EXAMPLE-api-2",
+      "to": "EXAMPLE-test-7"
+    },
+    {
+      "from": "EXAMPLE-api-2",
+      "to": "EXAMPLE-test-8"
+    },
+    {
+      "from": "EXAMPLE-api-2",
+      "to": "EXAMPLE-test-9"
+    },
+    {
+      "from": "EXAMPLE-api-2",
+      "to": "EXAMPLE-test-10"
+    },
+    {
+      "from": "EXAMPLE-api-2",
+      "to": "EXAMPLE-test-11"
+    }
+  ]
+}

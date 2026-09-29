@@ -1,0 +1,74 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="channelshift-token" content="__CHANNELSHIFT_TOKEN__">
+  <meta name="color-scheme" content="light">
+  <meta name="referrer" content="no-referrer">
+  <title>ChannelShift · 회원 로그인</title>
+  <link rel="icon" href="data:,">
+  <link rel="stylesheet" href="/login.css">
+  <script src="/login.js" defer></script>
+</head>
+<body>
+  <header class="page-header"><a class="brand" href="/login" aria-label="ChannelShift 회원 로그인"><span class="brand-mark" aria-hidden="true"><i></i><i></i><i></i></span>ChannelShift</a><span class="header-label">회원 공간</span></header>
+  <main class="auth-shell">
+    <div class="connection"><span id="connection-state" role="status">연결 확인 중</span><button id="refresh-status" class="text-button" type="button">다시 확인</button></div>
+    <p id="email-warning" class="notice" hidden></p>
+    <div id="message" class="message" role="status" aria-live="polite" hidden></div>
+    <nav id="auth-tabs" class="auth-tabs" aria-label="회원 메뉴"><button id="show-login" type="button" aria-current="page">로그인</button><button id="show-register" type="button">회원가입</button></nav>
+
+    <section id="login-panel" aria-labelledby="login-title">
+      <h1 id="login-title">로그인</h1>
+      <form id="login-form">
+        <label for="login-username">아이디</label><input id="login-username" name="username" autocomplete="username" autocapitalize="none" spellcheck="false" required>
+        <label for="login-password">비밀번호</label><input id="login-password" name="password" type="password" autocomplete="current-password" required>
+        <button id="login-submit" class="button primary" type="submit" disabled>로그인</button>
+      </form>
+      <button id="show-resend" class="text-button secondary-action" type="button">인증 메일 다시 받기</button>
+    </section>
+
+    <section id="register-panel" aria-labelledby="register-title" hidden>
+      <h1 id="register-title">회원가입</h1>
+      <form id="register-form">
+        <label for="register-username">아이디</label><input id="register-username" name="username" autocomplete="username" autocapitalize="none" spellcheck="false" aria-describedby="username-help" required><p id="username-help" class="field-help">영문·숫자·밑줄(_) 4~32자</p>
+        <label for="register-email">이메일</label><input id="register-email" name="email" type="email" autocomplete="email" autocapitalize="none" spellcheck="false" required>
+        <label for="register-password">비밀번호</label><input id="register-password" name="password" type="password" autocomplete="new-password" aria-describedby="password-help" required><p id="password-help" class="field-help">8~128자</p>
+        <label for="register-password-confirm">비밀번호 확인</label><input id="register-password-confirm" name="password_confirm" type="password" autocomplete="new-password" required>
+        <button id="register-submit" class="button primary" type="submit" disabled>인증 메일 요청</button>
+      </form>
+    </section>
+
+    <section id="waiting-panel" aria-labelledby="waiting-title" hidden>
+      <span class="eyebrow">이메일 인증</span><h1 id="waiting-title">메일함을 확인해 주세요</h1>
+      <p id="waiting-email" class="email-address"></p><p class="description">인증 안내를 요청했습니다. 메일의 링크를 열어 본인 비밀번호를 설정하면 인증이 완료됩니다.</p>
+      <div class="stack-actions"><button id="waiting-resend" class="button secondary" type="button">인증 메일 다시 받기</button><button id="waiting-login" class="text-button" type="button">로그인으로 이동</button></div>
+    </section>
+
+    <section id="verify-panel" aria-labelledby="verify-title" hidden>
+      <span class="eyebrow">이메일 인증</span><h1 id="verify-title">내 비밀번호 설정</h1>
+      <p class="description">이 계정에서 사용할 비밀번호를 직접 설정해 주세요.</p>
+      <form id="verify-form">
+        <label for="verify-password">새 비밀번호</label><input id="verify-password" name="password" type="password" autocomplete="new-password" aria-describedby="verify-password-help" required><p id="verify-password-help" class="field-help">8~128자</p>
+        <label for="verify-password-confirm">새 비밀번호 확인</label><input id="verify-password-confirm" name="password_confirm" type="password" autocomplete="new-password" required>
+        <button id="verify-submit" class="button primary" type="submit" disabled>인증 완료</button>
+      </form>
+      <button id="verify-resend" class="text-button secondary-action" type="button">새 인증 메일 받기</button>
+    </section>
+
+    <section id="resend-panel" aria-labelledby="resend-title" hidden>
+      <h1 id="resend-title">인증 메일 다시 받기</h1>
+      <form id="resend-form"><label for="resend-email">가입한 이메일</label><input id="resend-email" name="email" type="email" autocomplete="email" autocapitalize="none" spellcheck="false" required><button id="resend-submit" class="button primary" type="submit" disabled>인증 메일 요청</button></form>
+      <button id="resend-login" class="text-button secondary-action" type="button">로그인으로 이동</button>
+    </section>
+
+    <section id="account-panel" aria-labelledby="account-title" hidden>
+      <span class="eyebrow">로그인됨</span><h1 id="account-title">내 계정</h1><p id="account-username" class="account-name"></p><p id="account-email" class="email-address"></p>
+      <div class="stack-actions"><a class="button primary" href="/delivery">작업 공간 열기</a><a id="account-admin" class="button secondary" href="/admin" hidden>관리자 화면</a><button id="logout" class="button secondary" type="button">로그아웃</button></div>
+    </section>
+    <noscript><p class="notice">로그인하려면 브라우저에서 JavaScript를 사용해야 합니다.</p></noscript>
+  </main>
+  <footer class="page-footer">ChannelShift</footer>
+</body>
+</html>
