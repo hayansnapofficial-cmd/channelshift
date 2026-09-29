@@ -1,0 +1,8 @@
+include LICENSE THIRD_PARTY_NOTICES.md CONTRACT.md
+recursive-include docs *.md *.json *.txt *LICENSE* *NOTICE* *COPYING*
+recursive-include skills *.md *.yaml *.py
+recursive-include scripts *.py *.ps1 *.cjs
+recursive-include tests *.py *.cjs
+recursive-include src/channelshift/web *.html *.js *.css
+global-exclude *.pyc
+global-exclude __pycache__

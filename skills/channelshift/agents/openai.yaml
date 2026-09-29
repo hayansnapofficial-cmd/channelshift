@@ -1,0 +1,6 @@
+interface:
+  display_name: "ChannelShift · DB 템플릿"
+  short_description: "웹·앱 기본 DB와 SQL·Java 코드를 만들고 로컬 편집기로 확인합니다"
+  default_prompt: "$channelshift로 이 프로젝트의 언어와 ORM을 확인하고 알맞은 기본 DB 템플릿을 만들어 줘. 필요한 모델 코드와 마이그레이션을 작성하고 로컬 편집기에 저장해 줘."
+policy:
+  allow_implicit_invocation: true

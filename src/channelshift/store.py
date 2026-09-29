@@ -1,0 +1,148 @@
+"""Immutable native schema versions in an operator-owned local directory."""
+from __future__ import annotations
+
+import hashlib
+import json
+import os
+import re
+import tempfile
+import unicodedata
+from datetime import datetime, timezone
+from pathlib import Path
+
+from .core import validate_schema
+
+MAX_BYTES = 2 * 1024 * 1024
+MAX_FILES = 10000
+ID = re.compile(r"[0-9a-f]{64}\Z")
+
+
+def canonical(schema):
+    try:
+        data = json.dumps(schema, ensure_ascii=False, sort_keys=True, separators=(",", ":"), allow_nan=False).encode("utf-8")
+    except (TypeError, ValueError, RecursionError, UnicodeError):
+        raise ValueError("invalid_schema") from None
+    if len(data) > MAX_BYTES or not validate_schema(schema)["valid"]:
+        raise ValueError("invalid_schema")
+    return data
+
+
+def directory():
+    return Path(os.environ.get("CHANNELSHIFT_HOME", str(Path.home() / ".channelshift"))).expanduser().absolute()
+
+
+def label_slug(label, limit=120):
+    if not isinstance(label, str) or not 1 <= len(label.strip()) <= limit:
+        raise ValueError("invalid_label")
+    normal = unicodedata.normalize("NFKC", label.strip())
+    readable = re.sub(r"[^\w-]", "-", normal, flags=re.UNICODE).strip("-_")[:40] or "item"
+    return "p-" + readable + "-" + hashlib.sha256(label.encode("utf-8")).hexdigest()[:12]
+
+
+class ProjectStore:
+    def __init__(self, root=None):
+        self.root = Path(root) if root is not None else directory()
+
+    def _root(self, create=False):
+        if self.root.is_symlink():
+            raise ValueError("unsafe_storage")
+        if create:
+            self.root.mkdir(parents=True, exist_ok=True, mode=0o700)
+        if self.root.exists() and not self.root.is_dir():
+            raise ValueError("unsafe_storage")
+        return self.root / "projects"
+
+    def _files(self):
+        base = self._root()
+        if base.is_symlink():
+            raise ValueError("unsafe_storage")
+        if not base.exists():
+            return
+        count = 0
+        for topic in base.iterdir():
+            if topic.is_symlink() or not topic.is_dir():
+                continue
+            for project in topic.iterdir():
+                if project.is_symlink() or not project.is_dir():
+                    continue
+                for path in project.iterdir():
+                    count += 1
+                    if count > MAX_FILES:
+                        raise ValueError("storage_index_limit")
+                    if ID.fullmatch(path.stem) and path.suffix == ".json" and not path.is_symlink() and path.is_file():
+                        yield path
+
+    def _read(self, path):
+        if path.is_symlink() or path.stat().st_size > MAX_BYTES + 4096:
+            raise ValueError("invalid_stored_project")
+        data = path.read_bytes()
+        if len(data) > MAX_BYTES + 4096:
+            raise ValueError("invalid_stored_project")
+        value = json.loads(data)
+        digest = hashlib.sha256(canonical(value["schema"])).hexdigest()
+        if value.get("id") != digest or path.stem != digest:
+            raise ValueError("invalid_stored_project")
+        if not isinstance(value.get("updatedAt"), str) or not isinstance(value.get("topic"), str):
+            raise ValueError("invalid_stored_project")
+        return value
+
+    def save(self, schema, topic="general"):
+        payload = canonical(schema)
+        digest = hashlib.sha256(payload).hexdigest()
+        base = self._root(create=True)
+        folder = base
+        for name in (None, label_slug(topic), label_slug(schema["name"], 200)):
+            if name:
+                folder = folder / name
+            if folder.is_symlink():
+                raise ValueError("unsafe_storage")
+            folder.mkdir(mode=0o700, exist_ok=True)
+        target = folder / (digest + ".json")
+        if target.is_symlink():
+            raise ValueError("unsafe_storage")
+        if target.exists():
+            self._read(target)
+            return {"ok": True, "id": digest, "stored": False}
+        value = {"id": digest, "topic": topic, "updatedAt": datetime.now(timezone.utc).isoformat(), "schema": schema}
+        encoded = json.dumps(value, ensure_ascii=False, separators=(",", ":"), allow_nan=False).encode("utf-8")
+        descriptor, temporary = tempfile.mkstemp(prefix=".pending-", dir=folder)
+        pending = Path(temporary)
+        try:
+            with os.fdopen(descriptor, "wb") as stream:
+                stream.write(encoded)
+                stream.flush()
+                os.fsync(stream.fileno())
+            # Publish without replacing an existing version, including in races.
+            try:
+                os.link(pending, target)
+            except FileExistsError:
+                self._read(target)
+                return {"ok": True, "id": digest, "stored": False}
+        finally:
+            pending.unlink(missing_ok=True)
+        return {"ok": True, "id": digest, "stored": True}
+
+    def list(self):
+        values = {}
+        skipped = 0
+        for path in self._files():
+            try:
+                value = self._read(path)
+                schema = value["schema"]
+                values[value["id"]] = {"id": value["id"], "name": schema["name"], "database": schema["database"],
+                                       "topic": value["topic"], "updatedAt": value["updatedAt"], "tableCount": len(schema["entities"])}
+            except (OSError, ValueError, KeyError, TypeError, RecursionError):
+                skipped += 1
+        return {"ok": True, "items": sorted(values.values(), key=lambda item: item["updatedAt"], reverse=True), "skipped": skipped}
+
+    def get(self, project_id):
+        if not isinstance(project_id, str) or not ID.fullmatch(project_id):
+            raise ValueError("invalid_project_id")
+        for path in self._files():
+            if path.stem == project_id:
+                try:
+                    value = self._read(path)
+                    return {"ok": True, "id": project_id, "schema": value["schema"]}
+                except (OSError, ValueError, KeyError, TypeError, RecursionError):
+                    continue
+        raise ValueError("project_not_found")

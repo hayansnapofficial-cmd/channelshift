@@ -1,0 +1,23 @@
+[build-system]
+requires = ["setuptools>=77"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "channelshift"
+version = "0.1.0"
+description = "Independent database starter templates, schema editor and MCP for application development"
+readme = "README.md"
+requires-python = ">=3.10"
+license = "MIT"
+license-files = ["LICENSE", "THIRD_PARTY_NOTICES.md", "docs/dependency-licenses/**/*"]
+dependencies = ["mcp==2.2.0"]
+
+[project.scripts]
+channelshift-mcp = "channelshift.mcp_server:main"
+channelshift-studio = "channelshift.web:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-data]
+channelshift = ["web/*.html", "web/*.js", "web/*.css"]
