@@ -24,6 +24,9 @@ def schema():
 def openapi():
     return {'openapi': '3.1.0', 'info': {'title': '테스트 API', 'version': '1.0.0'},
             'paths': {'/api/inquiries': {'get': {'operationId': 'listInquiries',
+                'x-channelshift-requirement-ids': ['REQ-001'],
+                'x-channelshift-fields': ['inquiries.id', 'inquiries.message'],
+                'x-channelshift-screens': ['SCREEN-001'],
                 'x-channelshift-table': 'inquiries', 'responses': {'200': {
                     'description': '조회 성공', 'content': {'application/json': {
                         'schema': {'$ref': '#/components/schemas/Inquiry'}}}}}}}},
@@ -41,7 +44,9 @@ def frontend():
                  '<!-- CHANNELSHIFT_SITE_FOOTER -->'
                  '<script src="/app.js"></script></body></html>'),
             file('frontend/app.js', "fetch('/api/inquiries').then(response => response.json());"),
-            file('frontend/style.css', 'body { color: #111; }')]
+            file('frontend/style.css', 'body { color: #111; }'),
+            file('frontend/screens.json', json.dumps({'screens': [{'screen_id': 'SCREEN-001',
+                'file': 'frontend/index.html', 'operation_ids': ['listInquiries']}]}))]
 
 
 def all_artifacts():
@@ -53,8 +58,15 @@ def all_artifacts():
         'erd': erd,
         'database': artifacts.build_database(schema()),
         'api': {'files': [file('api/openapi.json', json.dumps(openapi()))]},
-        'backend': {'files': [file('backend/app.py', 'raise RuntimeError("must never run")\n'),
-                             file('backend/README.md', 'Manual launch: python backend/app.py\n')]},
+        'backend': {'files': [file('backend/app.py', 'raise RuntimeError("must never run")\n'
+                                  'def listInquiries():\n    return []\n'
+                                  'ROUTES = {("GET", "/api/inquiries"): listInquiries}\n'),
+                             file('backend/README.md', 'Manual launch: python backend/app.py\n'),
+                             file('backend/test_app.py', 'from app import listInquiries\n'
+                                  'def test_list():\n    assert listInquiries() == []\n'),
+                             file('backend/routes.json', json.dumps({'routes': [{
+                                 'operation_id': 'listInquiries', 'handler': 'listInquiries',
+                                 'test_file': 'backend/test_app.py', 'test_symbol': 'test_list'}]}))]},
         'frontend': {'files': frontend()},
     }
 
@@ -206,16 +218,16 @@ class PipelineArtifactTests(unittest.TestCase):
 
     def test_backend_parsed_but_never_imported_or_executed(self):
         files = all_artifacts()['backend']['files']
-        checks = artifacts.validate_stage('backend', files, {})
-        self.assertEqual(checks['python_files_parsed'], 1)
+        checks = artifacts.validate_stage('backend', files, all_artifacts())
+        self.assertEqual(checks['python_files_parsed'], 2)
         self.assertFalse(checks['imports_executed'])
         self.assertFalse(checks['runtime_behavior_verified'])
         files[0]['content'] = 'def broken(:\n'
         with self.assertRaisesRegex(ValueError, '^invalid_pipeline_artifact$'):
-            artifacts.validate_stage('backend', files, {})
+            artifacts.validate_stage('backend', files, all_artifacts())
         files[0]['content'] = 'type Alias = int\n'
         with self.assertRaisesRegex(ValueError, '^invalid_pipeline_artifact$'):
-            artifacts.validate_stage('backend', files, {})
+            artifacts.validate_stage('backend', files, all_artifacts())
 
     def test_frontend_links_and_literal_api_paths_checked_without_js_execution(self):
         deps = all_artifacts()

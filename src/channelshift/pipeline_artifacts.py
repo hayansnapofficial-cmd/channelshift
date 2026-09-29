@@ -6,7 +6,6 @@ The caller owns approval gates; this module does not infer or grant approvals.
 """
 from __future__ import annotations
 
-import ast
 from copy import deepcopy
 import hashlib
 from html.parser import HTMLParser
@@ -19,6 +18,7 @@ from urllib.parse import unquote, urlsplit
 import zipfile
 
 from .core import export_sql, validate_schema
+from . import pipeline_contracts as contracts
 from .site_obligations import render_pages
 
 
@@ -228,7 +228,7 @@ def _screen_checks(files, dependencies):
                    for item in known_requirements)
             or len(set(known_requirements)) != len(known_requirements)):
         _fail()
-    ids, paths = set(), set()
+    ids, paths, covered = set(), set(), set()
     for screen in data['screens']:
         if type(screen) is not dict or screen.keys() != {'id', 'title', 'path', 'requirement_ids'}:
             _fail()
@@ -248,14 +248,27 @@ def _screen_checks(files, dependencies):
             _fail()
         if known_requirements is not None and not set(requirements) <= set(known_requirements):
             _fail()
+        covered.update(requirements)
         ids.add(key)
         paths.add(path)
+    if known_requirements is not None and covered != set(known_requirements):
+        _fail()
     html_count = sum(1 for path, content in files.items()
                      if path.lower().endswith('.html') and _HTML(content))
     return {'screens_count': len(ids), 'html_pages_parsed': html_count,
             'requirement_id_syntax_checked': True,
             'requirement_id_membership_checked': known_requirements is not None,
+            'requirement_declarations_checked': known_requirements is not None,
+            'requirement_declarations_covered': sorted(covered),
             'requirement_coverage_verified': False}
+
+
+def _screens_from(dependencies):
+    files = _dependency_files(dependencies, 'wireframe')
+    if not files:
+        return None
+    _screen_checks(files, dependencies)
+    return _json(files['wireframe/screens.json'])['screens']
 
 
 def _resolve_ref(document, ref):
@@ -359,8 +372,19 @@ def _openapi(files, dependencies):
                 database_links += 1
             operation_ids.add(operation_id)
             operations.append(method.upper() + ' ' + path)
+    screens = _screens_from(dependencies)
+    links = contracts.api_links(data, schema, screens,
+                                dependencies.get('confirmed_requirement_ids'))
+    schemas_checked = contracts.validate_api_schemas(data, _resolve_ref)
     return data, {'openapi_version': data['openapi'], 'operations': sorted(operations),
                   'local_references_checked': refs, 'database_links_checked': database_links,
+                  'schema_definitions_checked': schemas_checked,
+                  'schema_validation_profile': 'channelshift-json-schema-subset/v1',
+                  'operation_link_declarations_checked': True, 'operation_links': links,
+                  'operation_requirement_membership_checked': screens is not None
+                      or dependencies.get('confirmed_requirement_ids') is not None,
+                  'operation_field_membership_checked': schema is not None,
+                  'operation_screen_membership_checked': screens is not None,
                   'full_openapi_validation_performed': False}
 
 
@@ -415,7 +439,7 @@ def _local_link(target, source, files, api_paths):
 
 
 def _frontend_checks(files, dependencies):
-    required = {'frontend/index.html', 'frontend/app.js', 'frontend/style.css'}
+    required = {'frontend/index.html', 'frontend/app.js', 'frontend/style.css', 'frontend/screens.json'}
     if not required <= files.keys() or any(path.casefold() in {'frontend/' + name for name in _POLICY_PATHS}
                                         for path in files):
         _fail()
@@ -436,10 +460,17 @@ def _frontend_checks(files, dependencies):
     if not any(matches_resource(target, 'app.js') for target in index_document.script_sources) \
             or not any(matches_resource(target, 'style.css') for target in index_document.stylesheets):
         _fail()
-    api_paths = _api_paths(dependencies)
+    api_files = _dependency_files(dependencies, 'api')
+    if not api_files:
+        _fail()
+    api, api_checks = _openapi(api_files, dependencies)
+    api_paths = set(api['paths'])
+    operations = api_checks['operation_links']
     counts = {'html_pages_parsed': 0, 'local_links_checked': 0, 'api_literal_paths_checked': 0,
               'external_links_not_checked': 0, 'fetch_calls_detected': 0,
-              'dynamic_fetch_calls_not_checked': 0, 'javascript_syntax_validated': False}
+              'dynamic_fetch_calls_not_checked': 0, 'javascript_syntax_validated': False,
+              'api_literal_methods_checked': 0}
+    counts.update(contracts.frontend_bindings(files, operations, _screens_from(dependencies), _json))
     for path, content in files.items():
         if path.lower().endswith('.html'):
             document = _HTML(content)
@@ -461,19 +492,25 @@ def _frontend_checks(files, dependencies):
                 elif kind == 'external':
                     counts['external_links_not_checked'] += 1
         if path.lower().endswith(('.js', '.html')):
-            counts['fetch_calls_detected'] += len(re.findall(r'\bfetch\s*\(', content))
-            literal_calls = re.findall(r'''\bfetch\s*\(\s*(['"`])([^\r\n]*?)\1\s*(?=[,)])''', content)
-            literal_count = 0
-            for _, target in literal_calls:
-                if '${' in target or '\\' in target:
+            sources = [content] if path.lower().endswith('.js') else contracts.inline_scripts(content)
+            for target, method in (call for source in sources for call in contracts.literal_fetches(source)):
+                counts['fetch_calls_detected'] += 1
+                if target is None:
+                    counts['dynamic_fetch_calls_not_checked'] += 1
                     continue
-                literal_count += 1
                 kind = _local_link(target, path, files, api_paths)
                 if kind == 'api':
                     counts['api_literal_paths_checked'] += 1
+                    if method is not None:
+                        actual_path = unquote(urlsplit(target).path)
+                        if not any(operation['method'] == method and _api_match(actual_path, {operation['path']})
+                                   for operation in operations):
+                            _fail()
+                        counts['api_literal_methods_checked'] += 1
+                    else:
+                        counts['dynamic_fetch_calls_not_checked'] += 1
                 elif kind == 'external':
                     counts['external_links_not_checked'] += 1
-            counts['dynamic_fetch_calls_not_checked'] += max(0, len(re.findall(r'\bfetch\s*\(', content)) - literal_count)
     return counts
 
 
@@ -503,17 +540,11 @@ def validate_stage(stage, files, dependencies) -> dict:
         _, result = _openapi(entries, dependencies)
         checks.update(result)
     elif stage == 'backend':
-        if not {'backend/app.py', 'backend/README.md'} <= entries.keys():
+        api_files = _dependency_files(dependencies, 'api')
+        if not api_files:
             _fail()
-        python_files = [path for path in entries if path.lower().endswith('.py')]
-        for path in python_files:
-            try:
-                ast.parse(entries[path], filename=path, mode='exec', feature_version=(3, 10))
-            except (SyntaxError, ValueError, RecursionError, MemoryError):
-                _fail()
-        checks.update({'python_files_parsed': len(python_files), 'python_syntax_target': '3.10',
-                       'imports_executed': False,
-                       'dependency_availability_verified': False})
+        _, api_checks = _openapi(api_files, dependencies)
+        checks.update(contracts.backend_bindings(entries, api_checks['operation_links'], _json))
     elif stage == 'frontend':
         checks.update(_frontend_checks(entries, dependencies))
     return checks
@@ -607,8 +638,11 @@ def bundle(name, artifacts, obligations, *, evidence=None) -> bytes:
         'and initialize its application SQLite database from database/schema.sql on first launch. '
         'Application launch and initialization have not been performed by the export pipeline.\n\n'
         'The schema SQL was executed only in a new, empty in-memory SQLite database with foreign keys enabled. '
-        'Backend Python was parsed without importing or running it; frontend HTML and declared local links '
-        'were checked without running JavaScript. These checks do not establish runtime behavior, '
+        'Backend Python route declarations, handler symbols and test definitions were inspected without '
+        'importing or running them. Declared API requirements, database fields and screen mappings, '
+        'bounded request/response schemas, frontend HTML and supported literal fetch methods/paths '
+        'were checked without running JavaScript. Dynamic calls remain unchecked. Test definitions '
+        'are not test results. These checks do not establish runtime behavior, '
         'API implementation correctness, security, or legal sufficiency.\n\n'
         'Required site information and policies are included in frontend/. Check their factual accuracy '
         'and applicability before publication. No deployment or production database change was performed.\n'

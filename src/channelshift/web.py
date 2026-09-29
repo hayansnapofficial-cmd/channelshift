@@ -47,7 +47,7 @@ def error_code(error):
                "delivery_revision_conflict", "delivery_input_limit", "delivery_answers_required",
                "invalid_impact_graph", "invalid_impact_field", "impact_graph_too_complex",
                "service_not_configured", "invalid_workbench_settings",
-               "delivery_review_required", "delivery_erd_required", "delivery_erd_stale",
+               "delivery_review_required", "delivery_erd_required", "delivery_erd_stale", "delivery_erd_note_required",
                "delivery_client_requirements_required", "invalid_erd_input", "invalid_erd_schema", "invalid_pipeline_preview"}
     return str(error) if type(error) is ValueError and str(error) in allowed | ERRORS else "operation_failed"
 
@@ -180,6 +180,8 @@ def handler_factory(store=None, token=None, delivery=None, pipeline=None, *, pub
                     value = {'ok': True, 'obligations': catalog()}
                 elif self.path == '/api/studio/projects':
                     value = {'ok': True, 'items': intake_workspace().list()}
+                elif self.path.startswith('/api/studio/projects/') and self.path.endswith('/traceability'):
+                    value = studio_workspace().traceability(self.path.removeprefix('/api/studio/projects/').removesuffix('/traceability'))
                 elif self.path.startswith('/api/studio/projects/'):
                     value = studio_workspace().get(self.path.removeprefix('/api/studio/projects/'))
                 elif self.path == "/api/delivery/status":
@@ -261,7 +263,7 @@ def handler_factory(store=None, token=None, delivery=None, pipeline=None, *, pub
                     value = {"ok": True, "project": intake_workspace().collect_reference(**data)}
                 elif self.path == "/api/delivery/erd" and set(data) == {"project_id", "database", "expected_revision"}:
                     value = {"ok": True, "project": intake_workspace().generate_erd(**data)}
-                elif self.path == "/api/delivery/erd/save" and set(data) == {"project_id", "schema", "expected_revision"}:
+                elif self.path == "/api/delivery/erd/save" and {"project_id", "schema", "expected_revision"} <= set(data) <= {"project_id", "schema", "expected_revision", "note"}:
                     value = {"ok": True, "project": intake_workspace().save_erd(**data)}
                 elif self.path == "/api/workbench/settings" and set(data) == {"project_id", "section", "values", "expected_revision"}:
                     value = {"ok": True, "project": intake_workspace().save_settings(**data)}

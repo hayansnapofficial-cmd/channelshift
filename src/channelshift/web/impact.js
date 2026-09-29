@@ -24,6 +24,7 @@
     let session = null;
     let sequence = 0;
     let projectGeneration = 0;
+    let graphRevision = 0;
     const heading = node("div", "impact-heading");
     const title = node("h2", null, "변경 영향");
     title.id = "impact-heading";
@@ -120,6 +121,7 @@
 
     function clear({ project = false } = {}) {
       sequence += 1;
+      graphRevision += 1;
       if (project) { projectGeneration += 1; selection = null; }
       session = null;
       graph = null;
@@ -128,6 +130,22 @@
       fileName.textContent = "최대 128 KiB";
       if (!selection) target.textContent = "선택한 필드 없음";
       render(null);
+    }
+
+    function setGraph(value, label = "연결 정보", { expectedRevision } = {}) {
+      if (expectedRevision !== undefined && expectedRevision !== graphRevision) return false;
+      if (value !== null && (typeof value !== "object" || Array.isArray(value))) return false;
+      sequence += 1;
+      graphRevision += 1;
+      session = null;
+      graph = value;
+      clearButton.disabled = !graph;
+      fileName.textContent = String(label).slice(0, 160);
+      if (graph && selection) {
+        void select(getSchema(), selection.tableKey?.name || selection.tableId,
+          selection.fieldKey?.name || selection.fieldId, { fieldKey: selection.fieldKey, tableKey: selection.tableKey });
+      } else render(null, graph ? "필드 선택 필요" : label);
+      return true;
     }
 
     importButton.addEventListener("click", () => file.click());
@@ -152,20 +170,18 @@
         return;
       }
       if (generation !== projectGeneration || request !== sequence) return;
-      graph = parsed;
-      clearButton.disabled = false;
-      fileName.textContent = selectedFile.name.slice(0, 100);
-      if (selection) await select(getSchema(), selection.tableKey?.name || selection.tableId,
-        selection.fieldKey?.name || selection.fieldId, { fieldKey: selection.fieldKey, tableKey: selection.tableKey });
-      else render(null, "필드 선택 필요");
+      setGraph(parsed, selectedFile.name.slice(0, 100));
     });
 
     render(null);
     return Object.freeze({
       select,
+      setGraph,
+      getRevision: () => graphRevision,
       reset: () => clear({ project: true }),
       schemaChanged: (message = "") => {
         sequence += 1;
+        graphRevision += 1;
         session = null;
         render(null, message || (graph ? "구조 변경 · 연결 재확인 필요" : reasonText.graph_missing));
       },

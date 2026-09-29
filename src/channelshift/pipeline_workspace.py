@@ -24,6 +24,7 @@ STAGES = (('requirements', '요구사양'), ('wireframe', '화면 설계'), ('er
           ('frontend', '프론트'), ('delivery', '검수·납품'))
 ORDER = [key for key, _ in STAGES]
 GENERATED = {'wireframe', 'api', 'backend', 'frontend'}
+VALIDATION_PROFILE = 'channelshift.pipeline-contract/v2'
 MAX_EVENTS = 1000
 ERRORS = {'pipeline_revision_conflict', 'pipeline_stage_locked', 'pipeline_busy',
           'pipeline_review_note_required', 'pipeline_analysis_required',
@@ -201,6 +202,8 @@ class PipelineWorkspace:
                 'unmapped_requirements': draft['result']['unmapped_requirements'],
                 'traceability_current': draft['traceability_current']}, ensure_ascii=False, indent=2)}],
             draft['result']['notes'], {'schema_valid': True, 'database_executed': False,
+                                     'draft_revision': draft['revision'],
+                                     'wireframe_digest': draft.get('wireframe_digest'),
                                      'traceability_current': draft['traceability_current']})
 
     def _view(self, db, project_id):
@@ -225,6 +228,7 @@ class PipelineWorkspace:
                                'artifact': None, 'can_generate': False, 'can_approve': False})
                 continue
             input_key = _digest({'spec': confirmation['digest'] if confirmed else None,
+                                 'validation_profile': VALIDATION_PROFILE,
                                  'dependencies': {key: value['digest'] for key, value in dependencies.items()},
                                  'obligations': state['obligations'] if stage == 'delivery' else None})
             record = state['artifacts'].get(stage)
@@ -232,6 +236,11 @@ class PipelineWorkspace:
             if stage == 'erd' and record:
                 artifact = self._erd(project)
             current = bool(previous_ready and record and record['input_key'] == input_key and artifact)
+            if stage == 'erd' and current:
+                # A standalone draft cannot inherit a pipeline review just by
+                # returning the same schema bytes without its approved design.
+                current = bool(project['erd_draft'].get('wireframe_digest')
+                               == dependencies.get('wireframe', {}).get('digest'))
             approval = state['approvals'].get(stage)
             approved = bool(current and approval and approval['digest'] == artifact['digest']
                             and approval['input_key'] == input_key)
@@ -240,21 +249,30 @@ class PipelineWorkspace:
                            else 'stale' if record else 'ready' if previous_ready else 'locked')
             stages.append({'id': stage, 'label': label, 'state': stage_state, 'artifact': artifact,
                            'can_generate': bool(previous_ready and not busy),
+                           'can_edit': bool(stage in GENERATED and artifact and previous_ready and not busy),
                            'can_approve': bool(current and not approved and not busy), 'input_key': input_key,
                            'review': approval if approved else None})
             if artifact:
                 dependencies[stage] = artifact
             previous_ready = approved
         history = []
-        for row in db.execute('SELECT at,kind,payload FROM pipeline_events WHERE project_id=? ORDER BY seq DESC LIMIT 100', (project_id,)):
+        for row in db.execute('SELECT seq,at,kind,payload FROM pipeline_events WHERE project_id=? ORDER BY seq DESC LIMIT 100', (project_id,)):
             payload = json.loads(row['payload'])
-            history.append({'at': row['at'], 'kind': row['kind'], 'stage': payload.get('stage'), 'note': payload.get('note', '')})
+            history.append({'id': 'pipeline:' + str(row['seq']), 'at': row['at'], 'kind': row['kind'],
+                            'stage': payload.get('stage'), 'note': payload.get('note', '')})
+        for event in project['events']:
+            if event['kind'] == 'erd_edited':
+                history.append({'id': 'delivery:' + str(event['sequence']), 'at': event['created_at'],
+                                'kind': 'erd_edited', 'stage': 'erd', 'note': event['payload'].get('note', '')})
+        history.sort(key=lambda event: (event['at'], event['id'].partition(':')[0],
+                                        int(event['id'].partition(':')[2])), reverse=True)
         return {'ok': True, 'project': project, 'pipeline': {
             'revision': revision, 'site_type': state['site_type'], 'confirmed': confirmed,
             'analysis_current': analysis_current,
             'job': state['job'], 'stages': stages,
             'obligations': {'values': state['obligations'], 'assessment': site_obligations.assess(state['obligations'])},
-            'ready_for_delivery': stages[-1]['state'] == 'approved', 'history': history,
+            'ready_for_delivery': stages[-1]['state'] == 'approved', 'history': history[:100],
+            'validation_profile': VALIDATION_PROFILE,
             'execution': {'database': 'sqlite', 'application_executed': False, 'deployed': False}}}
 
     def get(self, project_id):
@@ -262,6 +280,10 @@ class PipelineWorkspace:
         with self._lock, self._db() as db:
             db.execute('BEGIN')
             return self._view(db, project_id)
+
+    def traceability(self, project_id):
+        from .pipeline_traceability import build_traceability
+        return build_traceability(self.get(project_id))
 
     def _check(self, db, project_id, expected_revision):
         view = self._view(db, project_id)
@@ -375,7 +397,7 @@ class PipelineWorkspace:
             elif action == 'edit' and set(payload) == {'stage', 'files', 'notes', 'note'}:
                 stage, note = payload['stage'], payload['note']
                 selected = next((s for s in view['pipeline']['stages'] if s['id'] == stage), None)
-                if stage not in GENERATED or not selected or selected['state'] not in {'generated', 'approved'}:
+                if not selected or not selected.get('can_edit'):
                     raise ValueError('pipeline_stage_locked')
                 if type(note) is not str or not note.strip() or len(note) > 2000:
                     raise ValueError('pipeline_review_note_required')
@@ -403,7 +425,8 @@ class PipelineWorkspace:
             if stage == 'erd':
                 project = self.delivery.get(project_id)
                 project = self.delivery.generate_erd(project_id, 'sqlite', project['intervention_revision'],
-                                                     pipeline_job_id=job['id'])
+                                                     pipeline_job_id=job['id'],
+                                                     wireframe_context=copy.deepcopy(dependencies['wireframe']))
                 child = next((event['payload']['job_id'] for event in reversed(project['events'])
                               if event['kind'] == 'erd_started'
                               and event['payload'].get('pipeline_job_id') == job['id']), None)

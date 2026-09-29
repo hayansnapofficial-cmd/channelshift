@@ -79,6 +79,8 @@ class StudioHTTPTests(unittest.TestCase):
         path = '/api/studio/projects/' + view['project']['id']
         self.assertEqual(self.call(path, session='')[0], 401)
         self.assertEqual(self.call(path, session='session-b-synthetic')[0], 400)
+        self.assertEqual(self.call(path + '/traceability', session='')[0], 401)
+        self.assertEqual(self.call(path + '/traceability', session='session-b-synthetic')[0], 400)
         self.assertEqual(self.call('/api/studio/projects', session='session-b-synthetic')[1]['items'], [])
         body = {'project_id': view['project']['id'], 'expected_revision': view['pipeline']['revision'],
                 'action': 'generate', 'payload': {'stage': 'frontend'}}
@@ -119,6 +121,30 @@ class StudioHTTPTests(unittest.TestCase):
         self.assertEqual(status, 200)
         self.assertIn(b'/app.js', html)
         self.assertIn('제작 작업실로 돌아가기', html.decode())
+
+    def test_traceability_endpoint_uses_current_member_artifacts_and_invalidates_on_edit(self):
+        view = self.drain(self.act(self.create(), 'analyze', answers=[]))
+        view = self.act(view, 'confirm')
+        for stage in ('wireframe', 'erd', 'api', 'database', 'backend', 'frontend'):
+            view = self.drain(self.act(view, 'generate', stage=stage))
+            view = self.act(view, 'approve', stage=stage, note='합성 요구사항과 대조했습니다.')
+        path = '/api/studio/projects/' + view['project']['id'] + '/traceability'
+        status, evidence, _ = self.call(path)
+        self.assertEqual(status, 200)
+        self.assertEqual(evidence['reason'], 'current')
+        self.assertEqual(set(evidence['graph']['covered_kinds']), {'api', 'backend', 'screen', 'test'})
+        self.assertFalse(evidence['runtime_behavior_verified'])
+        self.assertEqual(self.call(path, session='session-b-synthetic')[0], 400)
+        draft = view['project']['erd_draft']
+        model = draft['result']['schema']
+        model['entities'][0]['attributes'][1]['nullable'] = True
+        status, _, _ = self.call('/api/delivery/erd/save', {'project_id': view['project']['id'],
+            'schema': model, 'expected_revision': draft['revision'], 'note': '고객 요청으로 선택 입력으로 변경'})
+        self.assertEqual(status, 200)
+        status, evidence, _ = self.call(path)
+        self.assertEqual(status, 200)
+        self.assertIsNone(evidence['graph'])
+        self.assertEqual(evidence['reason'], 'contract_incomplete')
 
 
 if __name__ == '__main__':

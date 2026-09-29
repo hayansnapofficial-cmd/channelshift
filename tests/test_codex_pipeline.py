@@ -39,18 +39,25 @@ def candidate(stage):
         "wireframe": [
             {"path": "wireframe/index.html", "content": "<!doctype html><html><body><h1>문의 화면</h1></body></html>"},
             {"path": "wireframe/screens.json", "content": json.dumps({"screens": [
-                {"id": "SCREEN-001", "title": "문의", "path": "/", "requirement_ids": ["REQ-001"]}]})}],
+                {"id": "SCREEN-001", "title": "문의", "path": "/", "requirement_ids": ["REQ-001", "REQ-002"]}]})}],
         "api": [{"path": "api/openapi.json", "content": json.dumps({"openapi": "3.1.0",
             "info": {"title": "Site", "version": "1.0"}, "paths": {"/api/inquiries": {"post": {
-                "operationId": "createInquiry", "responses": {"201": {"description": "Created"}}}}}})}],
+                "operationId": "createInquiry", "x-channelshift-requirement-ids": ["REQ-002"],
+                "x-channelshift-fields": [], "x-channelshift-screens": ["SCREEN-001"],
+                "responses": {"201": {"description": "Created"}}}}}})}],
         "backend": [{"path": "backend/app.py", "content": "import sqlite3\n# Source candidate; not run by this test.\n"},
-                    {"path": "backend/README.md", "content": "Run python backend/app.py after review.\n"}],
+                    {"path": "backend/README.md", "content": "Run python backend/app.py after review.\n"},
+                    {"path": "backend/routes.json", "content": json.dumps({"routes": [{
+                        "operation_id": "createInquiry", "handler": "createInquiry",
+                        "test_file": "backend/test_app.py", "test_symbol": "test_create"}]})}],
         "frontend": [{"path": "frontend/index.html", "content": (
             "<!doctype html><html><body><h1>문의</h1>"
             + "".join('<a href="' + url + '">정책</a>' for url in sorted(pipeline.POLICY_LINKS))
             + pipeline.FOOTER_MARKER + "</body></html>")},
             {"path": "frontend/app.js", "content": "document.querySelector('h1').textContent = '문의';\n"},
-            {"path": "frontend/style.css", "content": "body { font-family: sans-serif; }\n"}],
+            {"path": "frontend/style.css", "content": "body { font-family: sans-serif; }\n"},
+            {"path": "frontend/screens.json", "content": json.dumps({"screens": [{
+                "screen_id": "SCREEN-001", "file": "frontend/index.html", "operation_ids": ["createInquiry"]}]})}],
     }
     return {"files": values[stage], "notes": ["실행 및 업무 검수가 필요합니다."]}
 
