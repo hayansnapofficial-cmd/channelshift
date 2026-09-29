@@ -172,6 +172,18 @@ class ValidationTests(unittest.TestCase):
             value["files"].append({"path": "frontend/" + name, "content": "<body>invented policy</body>"})
             self.invalid(value, "frontend")
 
+    def test_frontend_rejects_marked_declarations_without_rejecting_literal_examples(self):
+        for declaration in ("<![bogus]>", "<![CDATA[unexpected]]>", "<![if IE]>"):
+            with self.subTest(declaration=declaration):
+                value = candidate("frontend")
+                value["files"][0]["content"] = declaration + value["files"][0]["content"]
+                self.invalid(value, "frontend")
+        for literal in ('<!-- <![bogus]> -->', '<script>const example = "<![bogus]>";</script>'):
+            with self.subTest(literal=literal):
+                value = candidate("frontend")
+                value["files"][0]["content"] = literal + value["files"][0]["content"]
+                self.assertEqual(pipeline.validate_stage(value, "frontend"), value)
+
 
 class GenerationTests(unittest.TestCase):
     def test_invalid_inputs_never_start_model_transport(self):

@@ -20,4 +20,4 @@ SQLite의 동적 타입 등 DB별 표현력 차이가 있다. 코드 생성은 �
 
 ## 공용 기능 연결
 
-MCP에는 로컬 DB 도구 8개와 서버 공용 도구 3개가 있습니다. 공용 도구는 웹 프로그램의 MCP 연결에서 발급한 회원 키를 파일로 저장하고, MCP 프로세스의 `CHANNELSHIFT_SERVICE_URL`과 `CHANNELSHIFT_SERVICE_TOKEN_FILE`에 주소와 절대 파일 경로를 지정해야 사용할 수 있습니다. POSIX 파일 권한은 0600으로 제한합니다. 공급자 키나 Codex 인증 파일을 설정에 넣지 않습니다. 서버는 현재 localhost 파일럿이며 원격 공개 서비스는 별도 배포가 필요합니다.
+MCP에는 로컬 DB 도구 8개와 서버 공용 도구 3개가 있습니다. 공용 도구는 웹 프로그램의 MCP 연결에서 발급한 회원 키를 파일로 저장하고, MCP 프로세스의 `CHANNELSHIFT_SERVICE_URL`과 `CHANNELSHIFT_SERVICE_TOKEN_FILE`에 주소와 절대 파일 경로를 지정해야 사용할 수 있습니다. POSIX 파일 권한은 0600으로 제한합니다. 공급자 키나 Codex 인증 파일을 설정에 넣지 않습니다. 공개 서버 주소는 `https://channelshift.net`입니다. MCP의 `CHANNELSHIFT_SERVICE_URL`을 이 주소로 지정합니다. 로컬 개발 서버를 별도로 실행한 경우에만 localhost 주소를 사용합니다.
