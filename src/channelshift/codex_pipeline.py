@@ -14,6 +14,7 @@ import re
 from . import codex_erd
 from . import codex_intake as intake
 from . import site_obligations
+from . import production_guides
 
 SAFE_ERROR_CODES = intake.SAFE_ERROR_CODES
 CodexIntakeError = intake.CodexIntakeError
@@ -172,12 +173,18 @@ def _input(stage, confirmed_spec, dependency_artifacts):
     code = "invalid_pipeline_input"
     _require(type(stage) is str and stage in REQUIRED_FILES, code)
     _require(type(confirmed_spec) is dict
-             and set(confirmed_spec) == {"name", "database", "requirements", "obligations"}, code)
+             and {'name', 'database', 'requirements', 'obligations'} <= confirmed_spec.keys()
+             and not confirmed_spec.keys() - {'name', 'database', 'requirements', 'obligations', 'production_guides'}, code)
     _require(confirmed_spec["database"] == "sqlite" and type(confirmed_spec["requirements"]) is dict, code)
     _encoded(confirmed_spec, MAX_INPUT_BYTES, code)
     snapshot = copy.deepcopy(confirmed_spec["requirements"])
     snapshot["name"] = confirmed_spec["name"]
     try:
+        if 'production_guides' in confirmed_spec:
+            guide = production_guides.validate_descriptor(confirmed_spec['production_guides'])
+            if 'production_guides' in snapshot and snapshot['production_guides'] != guide:
+                raise ValueError('invalid_production_guides')
+            snapshot['production_guides'] = guide
         requirements = codex_erd._input(snapshot, "sqlite")
         site_obligations.validate(confirmed_spec["obligations"])
     except ValueError:
@@ -288,7 +295,9 @@ def generate_stage(stage, confirmed_spec, dependency_artifacts, *, codex_home=No
         "114688 bytes combined content, 131072 bytes JSON total, 16 distinct notes of at most 2000 characters. "
         "Use Korean UI and notes for Korean requirements. Notes describe unresolved limitations, never "
         "claim executed tests, authenticated approvals, publication, deployment or production readiness. "
-        + _STAGE_INSTRUCTIONS[stage] + "\n" + json.dumps(context, ensure_ascii=False)
+        + _STAGE_INSTRUCTIONS[stage] + " "
+        + production_guides.instructions(stage, context['confirmed_spec']['production_guides']['version']).replace('\n', ' ') + "\n"
+        + json.dumps(context, ensure_ascii=False)
     )
     result = intake._execute_json(prompt, schema, codex_home=codex_home)
     return validate_stage(result, stage)

@@ -6,6 +6,7 @@ when the external provider fails; a restart does not reset the budget.
 """
 from __future__ import annotations
 
+import copy
 import json
 import os
 import re
@@ -15,7 +16,7 @@ import uuid
 from contextlib import contextmanager
 from pathlib import Path
 
-from . import apify_reference, jev_review
+from . import apify_reference, feature_advisor, jev_review
 from .service_errors import SAFE_SERVICE_ERRORS, ServiceError
 
 SAFE_ERROR_CODES = SAFE_SERVICE_ERRORS
@@ -66,13 +67,14 @@ def _review_input(source, requirements):
 
 
 class SharedServices:
-    def __init__(self, path, *, review=None, collect=None, availability=None, clock=None):
+    def __init__(self, path, *, review=None, collect=None, advise=None, availability=None, clock=None):
         self.path = Path(path)
         if self.path.is_symlink() or self.path.parent.is_symlink():
             raise ServiceError('service_unavailable')
         self.path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
         self._review = review or jev_review.review_requirements
         self._collect = collect or apify_reference.collect_reference
+        self._advise = advise or feature_advisor.advise_workflow
         self._availability = availability or {
             'requirements_review': _review_configured,
             'reference_collect': apify_reference.configured,
@@ -168,6 +170,27 @@ class SharedServices:
         with self._reserve(member_id, 'reference_collect'):
             try:
                 return self._collect(url)
+            except ServiceError as error:
+                raise ServiceError(str(error) if str(error) in SAFE_SERVICE_ERRORS else 'service_unavailable') from None
+            except Exception:
+                raise ServiceError('service_unavailable') from None
+
+    def advise_workflow(self, member_id, stage, context):
+        """Explicit judgments share the existing Jev budget and concurrency guard."""
+        _member(member_id)
+        try:
+            checked = feature_advisor.validate_context(stage, context)
+        except jev_review.JevError:
+            raise ServiceError('service_invalid_input') from None
+        with self._reserve(member_id, 'requirements_review'):
+            try:
+                result = self._advise(stage, copy.deepcopy(checked))
+                return feature_advisor.validate_workflow_advice(result, stage, checked)
+            except jev_review.JevError as error:
+                code = {'jev_key_missing': 'service_not_configured',
+                        'invalid_jev_input': 'service_invalid_input',
+                        'jev_rate_limited': 'service_rate_limited'}.get(str(error), 'service_unavailable')
+                raise ServiceError(code) from None
             except ServiceError as error:
                 raise ServiceError(str(error) if str(error) in SAFE_SERVICE_ERRORS else 'service_unavailable') from None
             except Exception:

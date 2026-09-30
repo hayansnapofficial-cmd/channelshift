@@ -20,6 +20,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from .delivery_profile import STAGES
+from . import feature_guidance
 
 REASONS = {"missing_client_info", "contradictory_requirements", "model_error", "nonstandard_request",
            "access_approval", "quality_issue", "other"}
@@ -27,7 +28,7 @@ STAGE_IDS = {stage[0] for stage in STAGES}
 MAX_INPUT = 12000
 MAX_ANSWER = 2000
 MAX_ERD_BYTES = 2 * 1024 * 1024
-BUSY_STATES = {'EXTRACTING', 'REVIEWING', 'COLLECTING_REFERENCE', 'DESIGNING_ERD'}
+BUSY_STATES = {'EXTRACTING', 'REVIEWING', 'COLLECTING_REFERENCE', 'DESIGNING_ERD', 'ADVISING'}
 
 
 def _digest(value):
@@ -71,6 +72,14 @@ def _extraction_snapshot(project):
         snapshot['answer_refs'].append({key: answer[key] for key in
                                        ('candidate_revision', 'question_id', 'question_digest',
                                         'answer_revision', 'answer_digest')})
+    guidance = project.get('guidance')
+    if guidance and guidance['enabled']:
+        snapshot['text'] += '\n\n' + feature_guidance.input_text(guidance)
+        snapshot['feature_revision'] = project['feature_revision']
+        snapshot['feature_decisions'] = {'catalog_version': guidance['catalog_version'],
+                                         'decisions': feature_guidance.decisions(guidance)}
+    if project.get('production_guides'):
+        snapshot['production_guides'] = copy.deepcopy(project['production_guides'])
     if len(snapshot['text']) > MAX_INPUT:
         raise ValueError('delivery_input_limit')
     snapshot['digest'] = hashlib.sha256(snapshot['text'].encode('utf-8')).hexdigest()
@@ -92,12 +101,16 @@ def _text(value, limit, required=True):
 
 
 class DeliveryWorkspace:
-    def __init__(self, path=None, extract=None, review=None, collect=None, generate_erd=None):
+    def __init__(self, path=None, extract=None, review=None, collect=None, generate_erd=None,
+                 advise=None, extract_guided=None):
         from .codex_intake import extract_requirements
         from .jev_review import review_requirements
         self.extract = extract or extract_requirements
+        self.extract_guided = extract_guided or (None if extract else
+            lambda text, descriptor: extract_requirements(text, guide_descriptor=descriptor))
         self.review = review or review_requirements
         self.collect = collect
+        self.advise_callback = advise
         self._generate_erd = generate_erd
         root = Path(os.environ.get("CHANNELSHIFT_HOME", Path.home() / ".channelshift"))
         self.path = Path(path) if path is not None else root / "delivery.sqlite3"
@@ -134,7 +147,9 @@ class DeliveryWorkspace:
         db.execute("INSERT INTO events(project_id,created_at,kind,payload) VALUES(?,?,?,?)",
                    (project_id, _now(), kind, json.dumps(payload, ensure_ascii=False, allow_nan=False)))
 
-    def create(self, name, client_request):
+    def create(self, name, client_request, *, guided=False):
+        if type(guided) is not bool:
+            raise ValueError('invalid_delivery_input')
         name, text = _text(name, 200), _text(client_request, 12000)
         source = {'id': 'SRC-001', 'text': text, 'digest': hashlib.sha256(text.encode('utf-8')).hexdigest()}
         project_id = uuid.uuid4().hex
@@ -145,6 +160,12 @@ class DeliveryWorkspace:
             db.execute('INSERT INTO projects VALUES(?,?,?,?,?,?,?)',
                        (project_id, name, _now(), json.dumps(source, ensure_ascii=False), 'RECEIVED', None, None))
             self._event(db, project_id, 'source_registered', {'source_id': source['id'], 'digest': source['digest']})
+            if guided:
+                from .production_guides import descriptor
+                self._event(db, project_id, 'production_guides_pinned', {'descriptor': descriptor('v1')})
+                self._event(db, project_id, 'feature_guidance_enabled', {
+                    'catalog': feature_guidance.catalog(), 'source_digest': source['digest']})
+                _extraction_snapshot(self._get(db, project_id))
         return self.get(project_id)
 
     def list(self):
@@ -172,10 +193,36 @@ class DeliveryWorkspace:
         for event in events:
             event['payload'] = json.loads(event['payload'])
         result['events'] = events
+        guide_event = next((event for event in events if event['kind'] == 'production_guides_pinned'), None)
+        result['production_guides'] = guide_event['payload']['descriptor'] if guide_event else None
+        if result['production_guides']:
+            from .production_guides import validate_descriptor
+            validate_descriptor(result['production_guides'])
+        feature_setup = next((event['payload'] for event in events if event['kind'] == 'feature_guidance_enabled'), None)
+        result['feature_catalog'] = feature_setup['catalog'] if feature_setup else None
+        result['feature_history'] = [dict(event['payload'], created_at=event['created_at'])
+                                     for event in events if event['kind'] == 'feature_decisions_saved']
+        last_features = result['feature_history'][-1] if result['feature_history'] else None
+        result['guidance'] = feature_guidance.view(result['feature_catalog'],
+                                                  last_features['decisions'] if last_features else None)
+        result['feature_revision'] = (last_features['revision'] if last_features else
+                                      _digest({'project_id': project_id, 'setup': feature_setup}) if feature_setup else None)
         result['source_additions'] = [dict(event['payload'], created_at=event['created_at'])
                                       for event in events if event['kind'] == 'client_request_added']
         result['references'] = [dict(event['payload']['result']) for event in events
                                 if event['kind'] == 'reference_recorded']
+        advice_events = [event for event in events if event['kind'] in
+                         {'workflow_advice_started', 'workflow_advice_recorded', 'workflow_advice_failed'}]
+        result['workflow_advice'] = [dict(event['payload'], created_at=event['created_at'])
+                                    for event in advice_events if event['kind'] == 'workflow_advice_recorded']
+        last_advice = advice_events[-1] if advice_events else None
+        result['advice_job'] = ({'id': last_advice['payload']['job_id'],
+                                'stage': last_advice['payload']['stage'],
+                                'state': {'workflow_advice_started': 'running',
+                                          'workflow_advice_recorded': 'completed',
+                                          'workflow_advice_failed': 'failed'}[last_advice['kind']],
+                                'error': last_advice['payload'].get('code')}
+                               if last_advice else None)
         settings = [event['payload'] for event in events if event['kind'] == 'workspace_settings_saved']
         result['workspace_settings'] = {item['section']: item['values'] for item in settings}
         result['settings_revisions'] = {'seo': _digest({'project_id': project_id, 'section': 'seo', 'values': None})}
@@ -223,6 +270,11 @@ class DeliveryWorkspace:
         jobs = [event for event in events if event['kind'] == 'job_started']
         context = {key: result[key] for key in ('id', 'source', 'state', 'candidate', 'jev',
                                                'answer_context_digest', 'consent_revision')}
+        if result['guidance']['enabled']:
+            # Legacy projects keep their existing evidence digests unchanged.
+            context['feature_revision'] = result['feature_revision']
+        if result['production_guides']:
+            context['production_guides'] = result['production_guides']
         if result['source_additions']:
             # Empty additions preserve legacy review digests byte-for-byte.
             context['source_additions'] = result['source_additions']
@@ -233,6 +285,8 @@ class DeliveryWorkspace:
             # Consent/answer revisions remain in the context and still invalidate
             # the draft if they change during an external generation request.
             context['state'] = erd_events[-1]['payload']['previous_state']
+        if result['state'] == 'ADVISING' and last_advice and last_advice['kind'] == 'workflow_advice_started':
+            context['state'] = last_advice['payload']['previous_state']
         context['job_id'] = jobs[-1]['payload']['job_id'] if jobs else None
         context['format'] = 'channelshift.intervention-revision/v1'
         # The review snapshot binds the evidence. The write revision additionally
@@ -265,6 +319,8 @@ class DeliveryWorkspace:
             context['reference_sequence'] = reference_events[-1]['sequence']
         if erd_events:
             context['erd_sequence'] = erd_events[-1]['sequence']
+        if last_advice:
+            context['advice_sequence'] = last_advice['sequence']
         result['intervention_revision'] = _digest(context)
         return result
 
@@ -283,6 +339,14 @@ class DeliveryWorkspace:
                 raise ValueError('delivery_candidate_required')
             if current['answer_summary']['blocking_unanswered']:
                 raise ValueError('delivery_answers_required')
+            if current['guidance']['unresolved']:
+                raise ValueError('feature_guidance_required')
+            if current['guidance']['enabled']:
+                expected_input = _extraction_snapshot(current)
+                if not current['candidate_input'] or current['candidate_input']['digest'] != expected_input['digest'] \
+                        or current['candidate_input'].get('feature_revision') != current['feature_revision'] \
+                        or current['candidate_input'].get('production_guides') != current['production_guides']:
+                    raise ValueError('pipeline_analysis_required')
             if len(current['events']) >= 1000:
                 raise ValueError('delivery_storage_limit')
             if current['workflow_stage'] != 'requirements_review':
@@ -300,9 +364,59 @@ class DeliveryWorkspace:
                                        for item in current['question_answers']]}
                 if current['source_additions']:
                     payload['source_additions'] = current['source_additions']
+                if current['guidance']['enabled']:
+                    payload['feature_decisions'] = {
+                        'catalog_version': current['guidance']['catalog_version'],
+                        'revision': current['feature_revision'],
+                        'decisions': feature_guidance.decisions(current['guidance'])}
+                if current['production_guides']:
+                    payload['production_guides'] = copy.deepcopy(current['production_guides'])
                 self._event(db, project_id, 'requirements_review_requested', payload)
             result = self._get(db, project_id)
         return result
+
+    def save_features(self, project_id, decisions, expected_revision):
+        """Atomically append a complete choice snapshot after validating a batch."""
+        if not _hex_digest(expected_revision):
+            raise ValueError('invalid_delivery_input')
+        with self._connect() as db:
+            db.execute('BEGIN IMMEDIATE')
+            project = self._get(db, project_id)
+            if project['intervention_revision'] != expected_revision:
+                raise ValueError('delivery_revision_conflict')
+            if project['state'] in BUSY_STATES:
+                raise ValueError('delivery_busy')
+            if not project['guidance']['enabled']:
+                raise ValueError('feature_guidance_unavailable')
+            changes = feature_guidance.validate_decisions(project['feature_catalog'], decisions)
+            current = feature_guidance.decisions(project['guidance'])
+            by_id = {item['id']: item for item in current}
+            by_id.update({item['id']: item for item in changes})
+            merged = [by_id[item['id']] for item in current]
+            if merged == current:
+                return project
+            if len(project['events']) >= 1000:
+                raise ValueError('delivery_storage_limit')
+            guidance = feature_guidance.view(project['feature_catalog'], merged)
+            payload = {'catalog_version': guidance['catalog_version'], 'decisions': merged,
+                       'source_digest': project['source']['digest'],
+                       'source_context_digest': _digest([project['source']] + project['source_additions']),
+                       'candidate_revision': project['candidate_revision'],
+                       'review_context_revision': project['review_context_revision'],
+                       'previous_revision': project['feature_revision'],
+                       'actor_type': 'local_operator', 'approval_granted': False}
+            payload['revision'] = _digest(payload)
+            proposed = dict(project, guidance=guidance, feature_revision=payload['revision'])
+            _extraction_snapshot(proposed)  # Bound combined input before any event is committed.
+            payload['note'] = '\n'.join(
+                next(card['title'] for card in guidance['cards'] if card['id'] == item['id']) + ': '
+                + (next(option['label'] for card in guidance['cards'] if card['id'] == item['id']
+                        for option in card['options'] if option['id'] == item['option'])
+                   if item['option'] is not None else '미선택')
+                + (' / ' + item['note'] if item['note'] else '')
+                for item in changes if item != next(old for old in current if old['id'] == item['id']))
+            self._event(db, project_id, 'feature_decisions_saved', payload)
+            return self._get(db, project_id)
 
     def add_request(self, project_id, text, expected_revision):
         """Append client scope evidence without replacing source or invoking AI."""
@@ -445,6 +559,8 @@ class DeliveryWorkspace:
             return self._get(db, project_id)
 
     def start(self, project_id, operation):
+        if operation == 'review':
+            operation = 'jev'
         if operation not in {'extract', 'jev'}:
             raise ValueError('invalid_delivery_input')
         with self._lock:
@@ -452,7 +568,7 @@ class DeliveryWorkspace:
                 raise ValueError('delivery_busy')
             with self._connect() as db:
                 db.execute('BEGIN IMMEDIATE')
-                if db.execute("SELECT 1 FROM projects WHERE state IN ('EXTRACTING','REVIEWING','COLLECTING_REFERENCE','DESIGNING_ERD') LIMIT 1").fetchone():
+                if db.execute("SELECT 1 FROM projects WHERE state IN ('EXTRACTING','REVIEWING','COLLECTING_REFERENCE','DESIGNING_ERD','ADVISING') LIMIT 1").fetchone():
                     raise ValueError('delivery_recovery_required')
                 project = self._get(db, project_id)
                 if operation == 'jev' and not project['candidate']:
@@ -485,7 +601,7 @@ class DeliveryWorkspace:
                 raise ValueError('delivery_busy')
             with self._connect() as db:
                 db.execute('BEGIN IMMEDIATE')
-                if db.execute("SELECT 1 FROM projects WHERE state IN ('EXTRACTING','REVIEWING','COLLECTING_REFERENCE','DESIGNING_ERD') LIMIT 1").fetchone():
+                if db.execute("SELECT 1 FROM projects WHERE state IN ('EXTRACTING','REVIEWING','COLLECTING_REFERENCE','DESIGNING_ERD','ADVISING') LIMIT 1").fetchone():
                     raise ValueError('delivery_recovery_required')
                 project = self._get(db, project_id)
                 if project['intervention_revision'] != expected_revision:
@@ -498,6 +614,92 @@ class DeliveryWorkspace:
             self._active = True
             self._jobs.submit(self._run_reference, project, url, job_id)
         return self.get(project_id)
+
+    def advise(self, project_id, stage, context, expected_revision, *, basis_digest, provider_stage):
+        """Queue bounded advisory work without making an approval or scope change."""
+        allowed = {'features', 'reference', 'wireframe', 'erd', 'api', 'database', 'backend', 'frontend', 'delivery'}
+        if type(stage) is not str or stage not in allowed or not _hex_digest(expected_revision) \
+                or not _hex_digest(basis_digest) or type(provider_stage) is not str \
+                or not provider_stage or len(provider_stage) > 80 or type(context) is not dict:
+            raise ValueError('invalid_delivery_input')
+        try:
+            encoded = json.dumps(context, ensure_ascii=False, allow_nan=False).encode('utf-8')
+            if len(encoded) > 204800:
+                raise ValueError()
+            context = json.loads(encoded)
+        except (ValueError, TypeError, UnicodeError, RecursionError):
+            raise ValueError('invalid_delivery_input') from None
+        from .feature_advisor import validate_context
+        context = validate_context(provider_stage, context)
+        if self.advise_callback is None:
+            raise ValueError('service_not_configured')
+        with self._lock:
+            if self._active:
+                raise ValueError('delivery_busy')
+            with self._connect() as db:
+                db.execute('BEGIN IMMEDIATE')
+                if db.execute("SELECT 1 FROM projects WHERE state IN ('EXTRACTING','REVIEWING','COLLECTING_REFERENCE','DESIGNING_ERD','ADVISING') LIMIT 1").fetchone():
+                    raise ValueError('delivery_recovery_required')
+                project = self._get(db, project_id)
+                if project['intervention_revision'] != expected_revision:
+                    raise ValueError('delivery_revision_conflict')
+                if len(project['events']) >= 990:
+                    raise ValueError('delivery_storage_limit')
+                job_id = uuid.uuid4().hex
+                payload = {'job_id': job_id, 'stage': stage, 'provider_stage': provider_stage,
+                           'basis_digest': basis_digest, 'context': context, 'previous_state': project['state'],
+                           'approval_granted': False, 'scope_changed': False}
+                db.execute("UPDATE projects SET state='ADVISING' WHERE id=?", (project_id,))
+                self._event(db, project_id, 'workflow_advice_started', payload)
+            self._active = True
+            try:
+                self._jobs.submit(self._run_advice, project, payload)
+            except RuntimeError:
+                with self._connect() as db:
+                    db.execute('BEGIN IMMEDIATE')
+                    db.execute('UPDATE projects SET state=? WHERE id=?', (project['state'], project_id))
+                    self._event(db, project_id, 'workflow_advice_failed', {
+                        'job_id': job_id, 'stage': stage, 'provider_stage': provider_stage,
+                        'basis_digest': basis_digest, 'code': 'service_unavailable', 'elapsed_ms': 0})
+                self._active = False
+                raise ValueError('service_unavailable') from None
+        return self.get(project_id)
+
+    def _run_advice(self, project, job):
+        from .feature_advisor import validate_workflow_advice
+        from .shared_services import ServiceError, SAFE_ERROR_CODES as SERVICE_CODES
+        started = time.monotonic()
+        payload = {key: job[key] for key in ('job_id', 'stage', 'provider_stage', 'basis_digest')}
+        payload.update(id=job['job_id'], approval_granted=False, scope_changed=False)
+        try:
+            result = validate_workflow_advice(
+                self.advise_callback(job['provider_stage'], copy.deepcopy(job['context'])),
+                job['provider_stage'], job['context'])
+            encoded = json.dumps(result, ensure_ascii=False, allow_nan=False).encode('utf-8')
+            if type(result) is not dict or len(encoded) > 131072:
+                raise ServiceError('service_unavailable')
+            payload['result'] = json.loads(encoded)
+            kind = 'workflow_advice_recorded'
+        except Exception as error:
+            payload['code'] = str(error) if isinstance(error, ServiceError) and str(error) in SERVICE_CODES else 'service_unavailable'
+            kind = 'workflow_advice_failed'
+        payload['elapsed_ms'] = round((time.monotonic() - started) * 1000)
+        try:
+            with self._connect() as db:
+                db.execute('BEGIN IMMEDIATE')
+                latest = db.execute("SELECT kind,payload FROM events WHERE project_id=? AND kind IN "
+                    "('workflow_advice_started','workflow_advice_recorded','workflow_advice_failed') "
+                    "ORDER BY sequence DESC LIMIT 1", (project['id'],)).fetchone()
+                current = db.execute('SELECT state FROM projects WHERE id=?', (project['id'],)).fetchone()
+                if not current or current['state'] != 'ADVISING' or not latest \
+                        or latest['kind'] != 'workflow_advice_started' \
+                        or json.loads(latest['payload']).get('job_id') != job['job_id']:
+                    return
+                db.execute('UPDATE projects SET state=? WHERE id=?', (job['previous_state'], project['id']))
+                self._event(db, project['id'], kind, payload)
+        finally:
+            with self._lock:
+                self._active = False
 
     def generate_erd(self, project_id, database, expected_revision, *, pipeline_job_id=None,
                      wireframe_context=None):
@@ -512,7 +714,7 @@ class DeliveryWorkspace:
                 raise ValueError('delivery_busy')
             with self._connect() as db:
                 db.execute('BEGIN IMMEDIATE')
-                if db.execute("SELECT 1 FROM projects WHERE state IN ('EXTRACTING','REVIEWING','COLLECTING_REFERENCE','DESIGNING_ERD') LIMIT 1").fetchone():
+                if db.execute("SELECT 1 FROM projects WHERE state IN ('EXTRACTING','REVIEWING','COLLECTING_REFERENCE','DESIGNING_ERD','ADVISING') LIMIT 1").fetchone():
                     raise ValueError('delivery_recovery_required')
                 project = self._get(db, project_id)
                 if project['intervention_revision'] != expected_revision:
@@ -692,7 +894,17 @@ class DeliveryWorkspace:
         started = time.monotonic()
         try:
             if operation == 'extract':
-                result = self.extract(project['job_input']['text'])
+                guide = project['job_input'].get('production_guides')
+                if guide and self.extract_guided:
+                    result = self.extract_guided(project['job_input']['text'], copy.deepcopy(guide))
+                else:
+                    result = self.extract(project['job_input']['text'])
+                try:
+                    feature_guidance.validate_recommendations(project.get('feature_catalog'),
+                        project['job_input'].get('feature_decisions'), result.get('feature_recommendations', []))
+                except (ValueError, TypeError, AttributeError):
+                    from .codex_intake import CodexIntakeError
+                    raise CodexIntakeError('codex_invalid_output') from None
                 candidate, jev = json.dumps(result, ensure_ascii=False, allow_nan=False), None
                 if len(candidate.encode('utf-8')) > 131072:
                     from .codex_intake import CodexIntakeError

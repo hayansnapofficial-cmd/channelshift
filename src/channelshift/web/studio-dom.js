@@ -6,6 +6,19 @@ export function arrow() { const svg = document.createElementNS("http://www.w3.or
 export function button(label, callback, primary = false) { const el = node("button", primary ? "button primary" : "button secondary", label); el.type = "button"; if (primary) el.append(arrow()); el.addEventListener("click", callback); return el; }
 export function notice(value, error = false) { $("notice").textContent = value; $("notice").hidden = !value; $("notice").classList.toggle("error", error); }
 const errors = {
+  invalid_feature_decisions: "기능 선택과 설명을 확인하세요. 설명은 기능별 1,000자까지 입력할 수 있습니다.",
+  feature_guidance_required: "필수 기능 선택을 확인하세요. 선택 전·잘 모르겠어요·나중에 결정인 항목을 정한 뒤 계속하세요.",
+  feature_guidance_unavailable: "기능 목록을 불러올 수 없습니다. 최신 내용을 확인한 뒤 다시 시도하세요.",
+  invalid_workflow_advice: "점검에 필요한 입력 형식과 대상을 확인하세요.",
+  workflow_advice_required: "점검할 내용을 먼저 저장하세요.",
+  jev_not_configured: "점검을 위한 서버 연결이 필요합니다. 담당자에게 연결 설정을 요청하세요.",
+  jev_key_missing: "점검을 위한 서버 연결이 필요합니다. 담당자에게 연결 설정을 요청하세요.",
+  jev_auth_failed: "점검 서비스의 서버 연결을 확인하지 못했습니다. 담당자에게 확인을 요청하세요.",
+  jev_rate_limited: "점검 서비스 이용 한도에 도달했습니다. 잠시 후 다시 요청하세요.",
+  jev_unavailable: "점검 서비스에 연결하지 못했습니다. 잠시 후 다시 시도하세요.",
+  jev_invalid_output: "점검 결과의 형식을 확인하지 못했습니다. 입력을 보존했습니다.",
+  apify_not_configured: "자료 수집을 위한 서버 연결이 필요합니다. 담당자에게 연결 설정을 요청하세요.",
+  invalid_reference_url: "로그인 정보가 없는 HTTPS 공개 사이트 주소를 입력하세요.",
   pipeline_revision_conflict: "다른 작업으로 내용이 바뀌었습니다. 입력은 보존했습니다. 최신 내용을 확인한 뒤 다시 저장하세요.",
   pipeline_stage_locked: "앞 단계의 결과를 확인하고 승인한 뒤 진행하세요.",
   pipeline_busy: "프로젝트 작업이 진행 중입니다. 결과를 기다려 주세요.",

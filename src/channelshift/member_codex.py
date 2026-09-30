@@ -452,7 +452,7 @@ class MemberCodex:
                 self.connections.pop(user_id, None)
             return self._disconnected()
 
-    def extract_requirements(self, user_id, client_request):
+    def extract_requirements(self, user_id, client_request, *, guide_descriptor=None):
         with self._user_lock(user_id):
             home = self._home(user_id)
             with self.lock:
@@ -461,7 +461,11 @@ class MemberCodex:
                     raise MemberCodexError("codex_connection_busy")
             if not (home / "auth.json").exists():
                 raise MemberCodexError("codex_authentication_required")
-            return codex_intake.extract_requirements(client_request, codex_home=home)
+            options = {'codex_home': home}
+            if guide_descriptor is not None:
+                from .production_guides import validate_descriptor
+                options['guide_descriptor'] = validate_descriptor(guide_descriptor)
+            return codex_intake.extract_requirements(client_request, **options)
 
     def generate_erd(self, user_id, review_snapshot, database):
         from .codex_erd import generate_erd

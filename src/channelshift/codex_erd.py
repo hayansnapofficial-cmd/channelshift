@@ -12,6 +12,7 @@ import json
 
 from . import codex_intake as intake
 from . import core
+from . import production_guides
 
 SAFE_ERROR_CODES = intake.SAFE_ERROR_CODES
 CodexIntakeError = intake.CodexIntakeError
@@ -130,6 +131,11 @@ def _input(review_snapshot, database):
     context = {"name": name, "database": database, "client_source": source["text"],
                "client_requirements": client_requirements,
                "clarifications": clarifications}
+    try:
+        context['production_guides'] = (production_guides.validate_descriptor(review_snapshot['production_guides'])
+            if 'production_guides' in review_snapshot else production_guides.descriptor())
+    except ValueError:
+        raise intake.CodexIntakeError('invalid_erd_input') from None
     if 'wireframe_context' in review_snapshot:
         wireframe = validate_wireframe_context(review_snapshot['wireframe_context'],
                                               [item['id'] for item in client_requirements])
@@ -236,7 +242,8 @@ def generate_erd(review_snapshot, database, *, codex_home=None):
         "once in unmapped_requirements with a concrete reason, never both. For a display-only requirement "
         "that needs no database, use unmapped_requirements rather than inventing a table. Empty entities are "
         "allowed only when no client requirement needs storage. Notes must state design assumptions or "
-        "questions still needing human review, without promoting internal suggestions into schema.\n"
+        "questions still needing human review, without promoting internal suggestions into schema. "
+        + production_guides.instructions('erd', context['production_guides']['version']).replace('\n', ' ') + "\n"
         + json.dumps(context, ensure_ascii=False, allow_nan=False)
     )
     value = intake._execute_json(prompt, output_schema, codex_home=codex_home)
