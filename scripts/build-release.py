@@ -76,10 +76,12 @@ def audit_archive(path):
         raise ValueError("Release contains duplicate paths")
     if path.suffix == ".whl":
         expected = {"channelshift/web/" + name for name in (
-            "studio.html", "studio.css", "studio.js", "studio-dom.js", "studio-account.js", "studio-policy.js")}
+            "studio.html", "studio.css", "studio.js", "studio-dom.js", "studio-account.js", "studio-policy.js",
+            "studio-guidance.js")}
         expected.update("channelshift/" + name for name in (
             "pipeline_workspace.py", "pipeline_artifacts.py", "pipeline_contracts.py", "pipeline_traceability.py",
-            "pipeline_preview.py", "site_obligations.py", "member_web.py"))
+            "pipeline_preview.py", "site_obligations.py", "member_web.py", "feature_guidance.py",
+            "feature_advisor.py", "production_guides.py", "workflow_advice.py"))
         if not expected.issubset(names):
             raise ValueError("Release is missing required Studio files")
     return len(names)

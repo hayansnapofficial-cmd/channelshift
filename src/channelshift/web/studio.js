@@ -1,6 +1,7 @@
 import { $, api, list, text, node, button, notice, safeError, download } from "/studio-dom.js";
 import { createAccount } from "/studio-account.js";
 import { createPolicyEditor } from "/studio-policy.js";
+import { createFeatureGuidance } from "/studio-guidance.js";
 
 const groups = [
   {id:"requirements",label:"요구사항",stages:["requirements"]},
@@ -19,14 +20,15 @@ const stageCopy = {
   frontend:{title:"프론트 구현",description:"승인한 화면과 API에 맞춰 사용자 화면의 코드를 준비합니다.",create:"프론트 초안 만들기",ai:true},
   delivery:{title:"검수·납품",description:"단계별 결과와 운영·정책을 모아 납품 파일을 준비합니다.",create:"납품 검수 자료 만들기",ai:false},
 };
-const state = {view:null,projects:[],stage:"requirements",busy:false,sequence:0,timer:null,codex:null,answers:new Map(),notes:new Map(),fileDrafts:new Map(),additionalRequests:new Map(),newDirty:false,renderedRevision:null};
+const state = {view:null,projects:[],stage:"requirements",busy:false,sequence:0,timer:null,codex:null,services:null,answers:new Map(),notes:new Map(),fileDrafts:new Map(),additionalRequests:new Map(),referenceDrafts:new Map(),newDirty:false,renderedRevision:null};
 const currentProject = () => state.view?.project;
-const projectWorking = () => ["EXTRACTING","REVIEWING","COLLECTING_REFERENCE","DESIGNING_ERD","RUNNING"].includes(currentProject()?.state) || state.view?.pipeline?.job?.state === "running";
+const projectWorking = () => ["EXTRACTING","REVIEWING","COLLECTING_REFERENCE","DESIGNING_ERD","ADVISING","RUNNING"].includes(currentProject()?.state) || state.view?.pipeline?.job?.state === "running" || state.view?.pipeline?.advice_job?.state === "running";
 const working = () => state.busy || projectWorking();
 const answerKey = (project,saved) => `${project.id}:${project.candidate_revision}:${saved.question_digest}`;
-const hasUnsaved = () => state.newDirty || state.answers.size>0 || policy.hasUnsaved() || state.fileDrafts.size>0 || state.additionalRequests.size>0 || [...state.notes.values()].some((value)=>value.trim());
+const hasUnsaved = () => state.newDirty || state.answers.size>0 || policy.hasUnsaved() || guidance.hasUnsaved() || state.fileDrafts.size>0 || state.additionalRequests.size>0 || state.referenceDrafts.size>0 || [...state.notes.values()].some((value)=>value.trim());
 const account = createAccount((codex)=>{state.codex=codex;updateControls();},hasUnsaved);
 const policy = createPolicyEditor(async(payload,revision)=>action("save_obligations",payload,{revision,quiet:true}),updateControls);
+const guidance = createFeatureGuidance({onChange:updateControls,onRender:render,onSave:()=>saveFeatureChoices(),onAnalyze:()=>submitAnswers("analyze"),onUnsure:()=>submitAnswers("analyze")});
 
 function currentStages() {return list(state.view?.pipeline?.stages);}
 function nextStage() {return currentStages().find((stage)=>stage.state!=="approved")?.id || "delivery";}
@@ -35,9 +37,12 @@ function canExecute() {return state.codex?.can_execute===true;}
 function actionRow(control,ai=false) {const row=node("div","action-row");row.append(control);if(ai){row.append(node("span","field-help",canExecute()?"내 Codex 연결로 정리합니다.":"내 계정에서 Codex를 연결하세요."));}return row;}
 function markAction(control,ai=false){control.dataset.mutating="true";if(ai)control.dataset.ai="true";return control;}
 function updateControls(){
-  document.querySelectorAll("[data-mutating]").forEach((control)=>{control.disabled=working() || control.dataset.allowed==="false" || (control.dataset.ai==="true" && !canExecute()) || (control.dataset.cleanArtifact && state.fileDrafts.has(control.dataset.cleanArtifact)) || (control.dataset.cleanPolicies==="true" && policy.hasCurrentUnsaved(currentProject()?.id)) || (state.stage==="requirements" && state.additionalRequests.has(currentProject()?.id) && (control.dataset.ai==="true" || control.id==="confirm-requirements"));});
+  document.querySelectorAll("[data-mutating]").forEach((control)=>{control.disabled=working() || control.dataset.allowed==="false" || (control.dataset.ai==="true" && !canExecute()) || (control.dataset.cleanArtifact && state.fileDrafts.has(control.dataset.cleanArtifact)) || (control.dataset.cleanPolicies==="true" && policy.hasCurrentUnsaved(currentProject()?.id)) || (state.stage==="requirements" && state.additionalRequests.has(currentProject()?.id) && (control.dataset.ai==="true" || control.id==="confirm-requirements")) || (control.id==="confirm-requirements" && (guidance.hasCurrentUnsaved(state.view) || guidance.unresolved(state.view).length>0)) || (control.dataset.featureSave==="true" && guidance.hasConflict(state.view)) || (control.dataset.cleanFeatures==="true" && guidance.hasCurrentUnsaved(state.view));});
   const fileNotice=$("artifact-unsaved-message");if(fileNotice)fileNotice.hidden=!state.fileDrafts.has(fileNotice.dataset.artifact);
   const policyNotice=$("delivery-unsaved-message");if(policyNotice)policyNotice.hidden=!policy.hasCurrentUnsaved(currentProject()?.id);
+  const featureNotice=$("feature-draft-status");if(featureNotice)featureNotice.textContent=guidance.hasCurrentUnsaved(state.view)?"저장하지 않은 선택이 있습니다.":"저장 후 다시 정리해야 요구사항에 반영됩니다. 확정은 별도로 진행합니다.";
+  document.querySelectorAll("[data-feature-recommendation]").forEach((item)=>{item.hidden=guidance.hasCurrentUnsaved(state.view) || hasCurrentDrafts() || state.additionalRequests.has(currentProject()?.id);});
+  document.querySelectorAll("[data-clean-intake]").forEach((control)=>{control.disabled ||= guidance.hasCurrentUnsaved(state.view) || hasCurrentDrafts() || state.additionalRequests.has(currentProject()?.id);});
   $("create-project").disabled=state.busy;
   $("new-project").disabled=state.busy;
 }
@@ -95,7 +100,7 @@ function renderAdditionalRequest(){
 }
 function renderHistory(){
   $("history-panel").hidden=!currentProject();const target=$("pipeline-history");target.replaceChildren();
-  const labels={created:"프로젝트 등록",analyze:"요구사항 정리 요청",save_answers:"답변 저장",requirements_confirmed:"요구사항 확정",requirements_reopened:"요구사항 수정 재개",obligations_saved:"운영·정책 저장",generation_started:"초안 생성 시작",artifact_generated:"초안 생성 완료",generation_failed:"초안 생성 실패",artifact_reviewed:"검토·승인",artifact_edited:"파일 수정",erd_edited:"구조 수정",bundle_downloaded:"납품 파일 준비"};
+  const labels={created:"프로젝트 등록",analyze:"요구사항 정리 요청",save_answers:"답변 저장",save_features:"기능 선택 저장",features_saved:"기능 선택 저장",feature_decisions_saved:"기능 선택 저장",collect_reference:"참고 사이트 조사",review:"요구사항 점검",workflow_advice_started:"내용 점검 시작",workflow_advice_recorded:"내용 점검 의견",requirements_confirmed:"요구사항 확정",requirements_reopened:"요구사항 수정 재개",obligations_saved:"운영·정책 저장",generation_started:"초안 생성 시작",artifact_generated:"초안 생성 완료",generation_failed:"초안 생성 실패",artifact_reviewed:"검토·승인",artifact_edited:"파일 수정",erd_edited:"구조 수정",bundle_downloaded:"납품 파일 준비"};
   for(const item of list(state.view?.pipeline?.history)){
     const row=node("article","artifact-row"),stage=item.stage==="requirements"?"요구사항":stageCopy[item.stage]?.title;
     row.append(node("h3",null,`${stage?`${stage} · `:""}${labels[item.kind]||"작업 기록"}`));
@@ -118,24 +123,82 @@ function renderSavedDrafts(target,project){
   for(const draft of drafts){const row=node("div","artifact-row");row.append(node("h3",null,draft.question),node("p",null,draft.answer));const discard=node("button","text-button","확인하고 사본 정리");discard.type="button";discard.addEventListener("click",()=>{state.answers.delete(draft.key);render();});row.append(discard);section.append(row);}
   target.append(section);
 }
+function referenceUrl(value){try{const url=new URL(value);return url.protocol==="https:" && !url.username && !url.password ? url.href:null;}catch{return null;}}
+function renderAdvice(target,stage,{editable=true,available=true,artifactKey=null}={}){
+  const row=node("section","workflow-advice"),records=list(state.view?.pipeline?.advice).filter((item)=>item.stage===stage),record=records[records.length-1];
+  const title=stage==="features"?"선택 내용 점검":stage==="reference"?"참고자료 관련성 점검":"구현 내용 점검";
+  if(editable){
+    const check=markAction(button(title,()=>action("advise",{stage},{message:"점검을 요청했습니다. 결과는 참고 의견이며 승인은 별도로 진행합니다."})));
+    check.dataset.allowed=String(available && state.services?.jev_configured===true);
+    if(stage==="features")check.dataset.cleanFeatures="true";
+    if(artifactKey)check.dataset.cleanArtifact=artifactKey;
+    row.append(actionRow(check));
+    if(stage==="features")row.append(node("p","field-help","현재 선택을 저장한 뒤 점검할 수 있습니다."));
+  }
+  const job=state.view?.pipeline?.advice_job || currentProject()?.advice_job;
+  if(job?.stage===stage && job.state==="failed")row.append(node("p","notice error",safeError(job.error)));
+  if(record){
+    const details=node("details","compact-details");details.open=true;details.append(node("summary",null,`${title} 의견${record.current===false?" · 이전 입력 기준":""}`));
+    const labels={requested:"고객 요청과 연결됨",conflicts:"선택 내용이 충돌함",relevant:"프로젝트와 관련 있음",supported:"참고 근거가 구체적임",aligned:"요구사항과 일치함",unsupported_claim:"근거 없는 주장이 포함됨"};
+    const rows=list(record.result?.judgments),ul=node("ul","plain-list");
+    for(const item of rows){const judgment=item.uncertain || !Number.isFinite(item.probability)?"추가 확인 필요":item.probability>=0.5?"해당할 수 있다는 의견":"해당 가능성이 낮다는 의견";ul.append(node("li",null,`${text(item.item_id)} · ${labels[item.kind]||"내용 확인"}: ${judgment}`));}
+    details.append(ul,node("p","field-help","모델의 참고 의견입니다. 실제 작동 검사나 승인을 대신하지 않습니다."));
+    if(record.current===false)details.append(node("p","field-help","입력 내용이 바뀌었습니다. 현재 내용으로 다시 점검하세요."));
+    row.append(details);
+  }
+  if(row.childElementCount)target.append(row);
+}
+function renderResearch(target,project,confirmed){
+  const section=node("details","compact-details research-tools");section.append(node("summary",null,"참고 사이트·요구사항 점검"));
+  const references=list(project.references);
+  if(!confirmed){
+    const form=node("form","flow-form"),label=node("label",null,"살펴볼 공개 사이트 주소");label.htmlFor="research-reference-url";
+    const input=node("input");input.type="url";input.id=label.htmlFor;input.required=true;input.maxLength=2048;input.placeholder="https://example.com";input.value=state.referenceDrafts.get(project.id)||"";input.dataset.mutating="true";
+    input.addEventListener("input",()=>{if(input.value)state.referenceDrafts.set(project.id,input.value);else state.referenceDrafts.delete(project.id);});
+    const collect=markAction(button("참고 사이트 살펴보기",()=>{}));collect.type="submit";collect.dataset.allowed=String(state.services?.services?.reference_collect?.available===true);
+    const row=node("div","research-actions");row.append(input,collect);form.append(label,row,node("p","field-help","입력한 공개 주소를 서버의 자료 수집 서비스로 보냅니다. 수집 내용은 참고 자료로 보관합니다."));
+    if(collect.dataset.allowed==="false")form.append(node("p","field-help","자료 수집은 서버 연결 후 사용할 수 있습니다."));
+    form.addEventListener("submit",async(event)=>{event.preventDefault();if(working()||collect.disabled)return;const url=referenceUrl(input.value.trim());if(!url){notice("로그인 정보가 없는 HTTPS 공개 사이트 주소를 입력하세요.",true);return;}const draft=input.value;await action("collect_reference",{url},{beforeRender:()=>{if(state.referenceDrafts.get(project.id)===draft)state.referenceDrafts.delete(project.id);},message:"참고 사이트 조사를 요청했습니다. 수집 결과는 요구사항으로 자동 확정되지 않습니다."});});section.append(form);
+    const review=markAction(button("요구사항 점검",()=>action("review",{},{message:"요구사항 점검을 요청했습니다. 결과를 읽고 직접 판단해 주세요."})));review.dataset.allowed=String(Boolean(project.candidate) && state.view.pipeline.analysis_current===true && state.services?.jev_configured===true);review.dataset.cleanIntake="true";
+    section.append(actionRow(review),node("p","field-help","고객 원문과 요구사항 사이의 빠진 근거·모순을 살펴봅니다. 점검 결과는 승인이나 실제 기능 검사를 대신하지 않습니다."));
+    if(state.services?.jev_configured!==true)section.append(node("p","field-help","요구사항 점검은 서버 연결 후 사용할 수 있습니다."));
+  }
+  const judgmentLabels={supported:"입력 근거에서 확인됨",unsupported:"입력 근거를 찾지 못함",contradicted:"입력 근거와 모순될 수 있음",unclear:"추가 확인 필요"};
+  if(project.jev){const review=node("section","research-result");review.append(node("h3",null,`요구사항 점검 의견${state.view.pipeline.analysis_current===false?" · 이전 입력 기준":""}`));const rows=list(project.jev.items);if(rows.length){const ul=node("ul");for(const item of rows)ul.append(node("li",null,`${text(item.requirement_id)} · ${judgmentLabels[item.judgment]||"판정 내용 확인 필요"}`));review.append(ul);}else review.append(node("p","field-help","표시할 점검 의견이 없습니다."));review.append(node("p","field-help","참고 의견 · 자동 승인하지 않습니다."));section.append(review);}
+  for(const item of [...references].reverse()){
+    const row=node("article","research-result");row.append(node("h3",null,text(item.title)||"수집한 참고 자료"));const url=referenceUrl(item.url);
+    if(url){const link=node("a",null,url);link.href=url;link.target="_blank";link.rel="noopener noreferrer";row.append(link);}
+    row.append(node("p","field-help",`${displayDate(item.collected_at)} · 참고용${item.truncated?" · 일부 내용만 수집":""}`));
+    if(item.text){const details=node("details");details.append(node("summary",null,"수집 내용 보기"),node("p",null,text(item.text)));row.append(details);}section.append(row);
+  }
+  renderAdvice(section,"reference",{editable:!confirmed,available:references.length>0});
+  target.append(section);
+}
 function renderRequirements(){
   const project=currentProject(),confirmed=state.view.pipeline.confirmed,target=$("requirements-work");target.replaceChildren();
   $("requirements-heading").textContent=confirmed?"확정한 요구사항":"요구사항 정리";
   $("source-text").textContent=text(project.source?.text);
   if(projectWorking()){
-    target.append(node("p","stage-status status-dot",project.state==="EXTRACTING"?"Codex가 요청과 답변을 정리하고 있습니다.":"프로젝트 작업을 진행하고 있습니다."));
+    target.append(node("p","stage-status status-dot",project.state==="EXTRACTING"?"Codex가 요청·답변을 정리하고, 미결정 기능에 맞는 방식을 추천하고 있습니다.":"프로젝트 작업을 진행하고 있습니다."));
     renderRequirementsList(target,project);return;
   }
   const lastExtraction=[...list(project.events)].reverse().find((event)=>event.kind==="candidate_recorded" || (event.kind==="job_failed" && event.payload?.operation==="extract"));
   if(lastExtraction?.kind==="job_failed")target.append(node("p","notice error",safeError(lastExtraction.payload?.code)));
+  const lastResearch=[...list(project.events)].reverse().find((event)=>["reference_collected","advice_recorded","job_failed"].includes(event.kind));
+  if(lastResearch?.kind==="job_failed" && ["jev","reference","reference_collect"].includes(lastResearch.payload?.operation))target.append(node("p","notice error",safeError(lastResearch.payload?.code)));
+  renderResearch(target,project,confirmed);
   if(confirmed){
     renderRequirementsList(target,project);
+    guidance.render(target,state.view,{readonly:true});
+    renderAdvice(target,"features",{editable:false});
     const go=button("화면 설계로 계속",()=>setStage("wireframe"),true);target.append(actionRow(go));
     const back=node("button","text-button","요구사항 수정으로 돌아가기");back.type="button";back.addEventListener("click",()=>action("return",{}, {message:"요구사항 수정으로 돌아왔습니다. 이후 단계는 다시 확인해야 합니다."}));target.append(markAction(back));return;
   }
+  guidance.render(target,state.view);
+  if(state.view.pipeline.guidance?.enabled)renderAdvice(target,"features");
   if(!project.candidate){
     target.append(node("h2",null,"요청을 함께 정리해요"),node("p","field-help","원문을 내 Codex로 보내 필요한 질문과 요구사항을 정리합니다."));
-    const analyze=markAction(button("내 Codex로 정리",()=>action("analyze",{answers:[]}),true),true);target.append(actionRow(analyze,true));return;
+    if(!state.view.pipeline.guidance?.enabled){const analyze=markAction(button("내 Codex로 정리",()=>submitAnswers("analyze"),true),true);target.append(actionRow(analyze,true));}return;
   }
   const questions=list(project.candidate.questions);
   const analysisCurrent=state.view.pipeline.analysis_current !== false && !needsAnalysis(project);
@@ -146,7 +209,7 @@ function renderRequirements(){
       const saved=list(project.question_answers).find((row)=>row.question_id===question.id);if(!saved)return;
       const key=answerKey(project,saved),draft=state.answers.get(key),changed=Boolean(draft && draft.savedRevision!==saved.answer_revision);conflict ||= changed;
       const row=node("div","question-field"),label=node("label",null,`${index+1}. ${text(question.text)}`);label.htmlFor=`answer-${index}`;
-      const input=node("textarea");input.id=label.htmlFor;input.rows=3;input.maxLength=2000;input.value=draft?.answer ?? saved.answer ?? "";input.dataset.answerKey=key;
+      const input=node("textarea");input.id=label.htmlFor;input.rows=3;input.maxLength=2000;input.value=draft?.answer ?? saved.answer ?? "";input.dataset.answerKey=key;input.dataset.mutating="true";
       input.addEventListener("input",()=>{state.answers.set(key,{key,projectId:project.id,candidateRevision:project.candidate_revision,question:question.text,answer:input.value,savedRevision:draft?.savedRevision || saved.answer_revision});const confirm=$("confirm-requirements");if(confirm){confirm.disabled=true;confirm.dataset.allowed="false";}});
       row.append(label,input);
       if(changed){row.append(node("p","field-help",`다른 창에서 저장한 답변: ${saved.answer || "(빈 답변)"}`));const accept=node("button","text-button","현재 답변 확인함 · 내 입력 유지");accept.type="button";accept.addEventListener("click",()=>{draft.savedRevision=saved.answer_revision;render();});row.append(accept);}
@@ -158,19 +221,36 @@ function renderRequirements(){
     form.addEventListener("submit",(event)=>{event.preventDefault();if(!analyze.disabled)submitAnswers("analyze");});
     target.append(form);
   }
-  if(!questions.length && !analysisCurrent){const analyze=markAction(button(list(project.source_additions).length?"추가 요청 반영해 다시 정리":"요구사항 다시 정리",()=>action("analyze",{answers:[]}),true),true);target.append(actionRow(analyze,true));}
+  if(!questions.length && !analysisCurrent && !state.view.pipeline.guidance?.enabled){const analyze=markAction(button(list(project.source_additions).length?"추가 요청 반영해 다시 정리":"요구사항 다시 정리",()=>submitAnswers("analyze"),true),true);target.append(actionRow(analyze,true));}
   renderRequirementsList(target,project);
-  const canConfirm=!project.answer_summary?.blocking_unanswered && !hasCurrentDrafts() && analysisCurrent;
+  const canConfirm=!project.answer_summary?.blocking_unanswered && !hasCurrentDrafts() && !guidance.hasCurrentUnsaved(state.view) && !guidance.unresolved(state.view).length && analysisCurrent;
   const confirm=markAction(button("이 내용으로 확정하고 계속",async()=>{const result=await action("confirm",{});if(result){state.stage="wireframe";render();}},!questions.length && analysisCurrent));confirm.id="confirm-requirements";confirm.dataset.allowed=String(canConfirm);
   target.append(actionRow(confirm));
-  if(!canConfirm)target.append(node("p","field-help","필요한 답변을 저장하고 다시 정리한 뒤 명세를 확정할 수 있습니다."));
+  if(!canConfirm)target.append(node("p","field-help","기능 선택과 필요한 답변을 저장하고 다시 정리한 뒤 명세를 확정할 수 있습니다. ‘잘 모르겠어요’와 ‘나중에 결정’은 확인이 필요합니다."));
   renderSavedDrafts(target,project);
 }
 async function submitAnswers(actionName){
   if(working())return;const project=currentProject(),answers=answerPayload();
   if(answers.some((answer)=>Array.from(answer.answer).length>2000)){notice("답변은 각각 2,000자까지 입력하세요.",true);return;}
+  if(actionName==="analyze"){
+    if(!canExecute()){notice("내 계정에서 Codex를 연결하면 입력한 상황에 맞춰 추천받을 수 있습니다.",true);return;}
+    if(state.additionalRequests.has(project.id)){notice("작성 중인 추가 요청을 먼저 저장한 뒤 추천을 요청하세요.",true);return;}
+    if(guidance.hasConflict(state.view)){notice("다른 창에서 저장한 기능 선택을 확인한 뒤 다시 정리하세요.",true);return;}
+    if(hasAnswerConflict(project)){notice("다른 창에서 저장한 답변을 확인한 뒤 다시 정리하세요.",true);return;}
+    const sequence=state.sequence;
+    if(guidance.hasCurrentUnsaved(state.view) && !await saveFeatureChoices())return;
+    if(sequence!==state.sequence || currentProject()?.id!==project.id)return;
+  }
   const result=await action(actionName,{answers},{beforeRender:()=>clearCurrentAnswers(project),message:actionName==="save_answers"?"답변을 저장했습니다. 다시 정리하면 요구사항에 반영됩니다.":"내 Codex에 정리를 요청했습니다."});
   if(result)render();
+}
+function hasAnswerConflict(project){return list(project?.question_answers).some((saved)=>{const draft=state.answers.get(answerKey(project,saved));return draft && draft.savedRevision!==saved.answer_revision;});}
+async function saveFeatureChoices(){
+  if(working() || !state.view?.pipeline?.guidance?.enabled)return null;
+  if(guidance.hasConflict(state.view)){notice("다른 창에서 저장한 기능 선택을 확인한 뒤 저장하세요.",true);return null;}
+  const saved=guidance.snapshot(state.view);
+  if(saved.decisions.some((item)=>Array.from(item.note).length>1000)){notice("기능별 설명은 1,000자까지 입력하세요.",true);return null;}
+  return action("save_features",{decisions:saved.decisions},{revision:saved.revision,beforeRender:()=>guidance.acceptSaved(saved),message:"기능 선택을 저장했습니다. 다시 정리한 뒤 요구사항을 확인하세요."});
 }
 function renderStageNavigation(target,stage){
   if(!["erd","api","database"].includes(stage.id))return;
@@ -232,6 +312,7 @@ function renderArtifact(){
       const rationale=node("details","compact-details");rationale.append(node("summary",null,"설계 근거"));const ul=node("ul","plain-list");for(const item of list(draft?.result?.traceability))ul.append(node("li",null,`${item.entity} · ${list(item.requirement_ids).join(", ")}`));for(const item of list(draft?.result?.unmapped_requirements))ul.append(node("li",null,`${item.requirement_id} · DB 미반영: ${item.reason}`));if(draft?.traceability_current===false)rationale.append(node("p","field-help","수동 편집한 구조와 요구사항의 연결 근거를 다시 확인하세요."));rationale.append(ul);target.append(rationale);
     }
     renderArtifactFiles(target,stage.artifact,stage);
+    renderAdvice(target,stage.id,{available:["generated","approved"].includes(stage.state),artifactKey:`${currentProject().id}:${stage.id}:${stage.artifact.digest}`});
   }
   if(stage.can_approve){
     const form=node("form","flow-form");const label=node("label",null,"검토한 내용");label.htmlFor="approval-note";const input=node("textarea");input.id="approval-note";input.rows=2;input.maxLength=2000;input.required=true;const key=`${currentProject().id}:${stage.id}:${stage.artifact.digest}`;input.value=state.notes.get(key)||"";input.placeholder="확인한 항목과 남은 작업을 짧게 적어 주세요.";input.addEventListener("input",()=>state.notes.set(key,input.value));form.append(label,input);
@@ -304,7 +385,7 @@ async function init(){
   const results=await Promise.allSettled([api("/api/studio/catalog"),api("/api/studio/projects"),api("/api/delivery/status")]);
   if(results[0].status==="fulfilled")policy.setCatalog(results[0].value.obligations);else notice(results[0].reason.message,true);
   if(results[1].status==="fulfilled")state.projects=list(results[1].value.items);else notice(results[1].reason.message,true);
-  if(results[2].status==="fulfilled")account.setStatus(results[2].value);else notice(results[2].reason.message,true);
+  if(results[2].status==="fulfilled"){state.services=results[2].value;account.setStatus(results[2].value);}else notice(results[2].reason.message,true);
   const id=new URL(location.href).searchParams.get("project");
   if(id && /^[a-f0-9]{32}$/.test(id))await selectProject(id);else render();
 }

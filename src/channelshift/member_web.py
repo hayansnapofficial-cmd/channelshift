@@ -69,6 +69,10 @@ def member_handler_factory(auth, root, token=None, *, codex=None, services=None,
         ensure_active(user_id)
         return codex.extract_requirements(user_id, text)
 
+    def extract_guided_for(user_id, text, guide_descriptor):
+        ensure_active(user_id)
+        return codex.extract_requirements(user_id, text, guide_descriptor=guide_descriptor)
+
     def generate_erd_for(user_id, snapshot, database):
         ensure_active(user_id)
         return codex.generate_erd(user_id, snapshot, database)
@@ -85,6 +89,10 @@ def member_handler_factory(auth, root, token=None, *, codex=None, services=None,
         ensure_active(user_id)
         return services.collect_reference(user_id, url)
 
+    def advise_for(user_id, stage, context):
+        ensure_active(user_id)
+        return services.advise_workflow(user_id, stage, context)
+
     def workspace_handler(user):
         user_id = user['id']
         if not isinstance(user_id, str) or not re.fullmatch(r'[a-f0-9]{32}', user_id):
@@ -100,8 +108,10 @@ def member_handler_factory(auth, root, token=None, *, codex=None, services=None,
                         raise ValueError('unsafe_storage')
                 delivery = DeliveryWorkspace(member_root / 'delivery.sqlite3',
                     extract=lambda text: extract_for(user_id, text),
+                    extract_guided=lambda text, descriptor: extract_guided_for(user_id, text, descriptor),
                     review=lambda source, items: review_for(user_id, source, items),
                     collect=lambda url: collect_for(user_id, url),
+                    advise=lambda stage, context: advise_for(user_id, stage, context),
                     generate_erd=lambda snapshot, database: generate_erd_for(user_id, snapshot, database))
                 workspaces[user_id] = delivery
                 from .pipeline_workspace import PipelineWorkspace

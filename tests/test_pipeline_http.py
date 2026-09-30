@@ -20,7 +20,7 @@ class StudioHTTPTests(unittest.TestCase):
         self.addCleanup(self.temp.cleanup)
         self.codex = Mock()
         self.codex.status.return_value = {'can_execute': True, 'state': 'connected'}
-        self.codex.extract_requirements.side_effect = lambda user, text: candidate(text)
+        self.codex.extract_requirements.side_effect = lambda user, text, **kwargs: candidate(text)
         self.codex.generate_erd.side_effect = lambda user, snapshot, database: erd(snapshot, database)
         self.codex.generate_stage.side_effect = lambda user, stage, spec, deps: generated(stage, spec, deps)
         self.auth = IdentityFixture()
@@ -55,7 +55,10 @@ class StudioHTTPTests(unittest.TestCase):
     def create(self):
         status, view, _ = self.call('/api/studio/projects', {'name': 'HTTP 합성 프로젝트', 'client_request': SOURCE, 'site_type': 'saas'})
         self.assertEqual(status, 200)
-        return view
+        # Exercise the default guided path through the authenticated boundary.
+        return self.act(view, 'save_features', decisions=[
+            {'id': card['id'], 'option': card['options'][0]['id'], 'note': ''}
+            for card in view['pipeline']['guidance']['cards']])
 
     def act(self, view, action, **payload):
         status, result, _ = self.call('/api/studio/action', {'project_id': view['project']['id'],
@@ -93,6 +96,8 @@ class StudioHTTPTests(unittest.TestCase):
 
     def test_sandbox_preview_and_generation_use_the_authenticated_members_workspace(self):
         view = self.drain(self.act(self.create(), 'analyze', answers=[]))
+        self.assertEqual(self.codex.extract_requirements.call_args.kwargs['guide_descriptor'],
+                         view['project']['production_guides'])
         view = self.act(view, 'confirm')
         view = self.drain(self.act(view, 'generate', stage='wireframe'))
         self.assertEqual(view['pipeline']['job']['state'], 'completed')

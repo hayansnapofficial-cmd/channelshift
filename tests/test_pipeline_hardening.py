@@ -26,7 +26,7 @@ class HardeningTests(unittest.TestCase):
         self.pipeline = workspace.PipelineWorkspace(self.delivery, generate=self.generator)
         self.addCleanup(self.delivery.close)
         self.addCleanup(self.pipeline.close)
-        self.view = self.pipeline.create('합성 경계 검사', SOURCE, 'service')
+        self.view = self.pipeline.create('합성 경계 검사', SOURCE, 'service', guided=False)
         self.project_id = self.view['project']['id']
 
     def refresh(self):

@@ -31,7 +31,8 @@ ERRORS = {'pipeline_revision_conflict', 'pipeline_stage_locked', 'pipeline_busy'
           'pipeline_artifact_required', 'pipeline_storage_limit', 'pipeline_job_failed',
           'pipeline_artifact_stale', 'invalid_pipeline_input', 'invalid_pipeline_artifact',
           'pipeline_database_check_failed', 'site_obligations_incomplete',
-          'invalid_site_obligations', 'pipeline_recovery_required'}
+           'invalid_site_obligations', 'pipeline_recovery_required',
+           'invalid_feature_decisions', 'feature_guidance_required', 'feature_guidance_unavailable'}
 
 
 def _empty():
@@ -180,10 +181,10 @@ class PipelineWorkspace:
                 confirmation['snapshot']['candidate']['requirements'] if item.get('origin') == 'client']
         return result
 
-    def create(self, name, client_request, site_type):
+    def create(self, name, client_request, site_type, *, guided=True):
         if site_type not in site_obligations.catalog()['site_types']:
             raise ValueError('invalid_pipeline_input')
-        project = self.delivery.create(name, client_request)
+        project = self.delivery.create(name, client_request, guided=guided)
         with self._lock, self._db() as db:
             state = _empty()
             state['site_type'] = site_type
@@ -213,6 +214,12 @@ class PipelineWorkspace:
         try:
             analysis_current = bool(project['candidate_input'] and
                                     project['candidate_input']['digest'] == _extraction_snapshot(project)['digest'])
+            if project['guidance']['enabled']:
+                analysis_current = bool(analysis_current and
+                    project['candidate_input'].get('feature_revision') == project['feature_revision'])
+            if project['production_guides']:
+                analysis_current = bool(analysis_current and project['candidate_input'].get('production_guides')
+                                        == project['production_guides'])
         except ValueError:
             analysis_current = False
         confirmed = bool(analysis_current and confirmation and project['requirements_review'] and
@@ -227,10 +234,13 @@ class PipelineWorkspace:
                 stages.append({'id': stage, 'label': label, 'state': 'approved' if confirmed else 'ready',
                                'artifact': None, 'can_generate': False, 'can_approve': False})
                 continue
-            input_key = _digest({'spec': confirmation['digest'] if confirmed else None,
-                                 'validation_profile': VALIDATION_PROFILE,
-                                 'dependencies': {key: value['digest'] for key, value in dependencies.items()},
-                                 'obligations': state['obligations'] if stage == 'delivery' else None})
+            input_basis = {'spec': confirmation['digest'] if confirmed else None,
+                           'validation_profile': VALIDATION_PROFILE,
+                           'dependencies': {key: value['digest'] for key, value in dependencies.items()},
+                           'obligations': state['obligations'] if stage == 'delivery' else None}
+            if project['production_guides']:
+                input_basis['production_guides'] = project['production_guides']
+            input_key = _digest(input_basis)
             record = state['artifacts'].get(stage)
             artifact = copy.deepcopy(record['artifact']) if record else None
             if stage == 'erd' and record:
@@ -261,19 +271,33 @@ class PipelineWorkspace:
             history.append({'id': 'pipeline:' + str(row['seq']), 'at': row['at'], 'kind': row['kind'],
                             'stage': payload.get('stage'), 'note': payload.get('note', '')})
         for event in project['events']:
-            if event['kind'] == 'erd_edited':
+            if event['kind'] in {'erd_edited', 'feature_decisions_saved'}:
                 history.append({'id': 'delivery:' + str(event['sequence']), 'at': event['created_at'],
-                                'kind': 'erd_edited', 'stage': 'erd', 'note': event['payload'].get('note', '')})
+                                'kind': event['kind'], 'stage': 'erd' if event['kind'] == 'erd_edited' else 'requirements',
+                                'note': event['payload'].get('note', '')})
         history.sort(key=lambda event: (event['at'], event['id'].partition(':')[0],
                                         int(event['id'].partition(':')[2])), reverse=True)
-        return {'ok': True, 'project': project, 'pipeline': {
+        result = {'ok': True, 'project': project, 'pipeline': {
             'revision': revision, 'site_type': state['site_type'], 'confirmed': confirmed,
             'analysis_current': analysis_current,
+            'guidance': copy.deepcopy(project['guidance']),
+            'production_guides': copy.deepcopy(project['production_guides']),
             'job': state['job'], 'stages': stages,
             'obligations': {'values': state['obligations'], 'assessment': site_obligations.assess(state['obligations'])},
             'ready_for_delivery': stages[-1]['state'] == 'approved', 'history': history[:100],
             'validation_profile': VALIDATION_PROFILE,
             'execution': {'database': 'sqlite', 'application_executed': False, 'deployed': False}}}
+        result['pipeline']['advice'] = []
+        result['pipeline']['advice_job'] = copy.deepcopy(project['advice_job'])
+        for advice in project['workflow_advice']:
+            from .workflow_advice import build_context
+            try:
+                _, _, basis = build_context(result, advice['stage'])
+                current = basis == advice['basis_digest']
+            except ValueError:
+                current = False
+            result['pipeline']['advice'].append(dict(advice, current=current))
+        return result
 
     def get(self, project_id):
         self._recover_dead_jobs()
@@ -315,6 +339,26 @@ class PipelineWorkspace:
                 self.delivery.add_request(project_id, payload['text'], project['intervention_revision'])
                 state['confirmation'] = None
                 self._write(db, project_id, state, version, 'client_request_added', {'stage': 'requirements'})
+            elif action == 'save_features' and set(payload) == {'decisions'}:
+                updated = self.delivery.save_features(project_id, payload['decisions'], project['intervention_revision'])
+                if updated['feature_revision'] != project['feature_revision']:
+                    state['confirmation'] = None
+                    self._write(db, project_id, state, version, 'features_saved', {'stage': 'requirements'})
+            elif action == 'review' and not payload:
+                if not view['pipeline']['analysis_current']:
+                    raise ValueError('pipeline_analysis_required')
+                self.delivery.start(project_id, 'review')
+                self._write(db, project_id, state, version, 'requirements_advice_requested', {'stage': 'requirements'})
+            elif action == 'collect_reference' and set(payload) == {'url'}:
+                self.delivery.collect_reference(project_id, payload['url'], project['intervention_revision'])
+                self._write(db, project_id, state, version, 'reference_requested', {'stage': 'requirements'})
+            elif action == 'advise' and set(payload) == {'stage'}:
+                from .workflow_advice import build_context
+                provider_stage, context, basis = build_context(view, payload['stage'])
+                self.delivery.advise(project_id, payload['stage'], context, project['intervention_revision'],
+                                     basis_digest=basis, provider_stage=provider_stage)
+                self._write(db, project_id, state, version, 'workflow_advice_requested',
+                            {'stage': payload['stage']})
             elif action in {'analyze', 'save_answers'} and set(payload) == {'answers'}:
                 answers = payload['answers']
                 if type(answers) is not list or len(answers) > 30:
@@ -344,6 +388,8 @@ class PipelineWorkspace:
                 state['confirmation'] = None
                 self._write(db, project_id, state, version, action, {'stage': 'requirements'})
             elif action == 'confirm' and not payload:
+                if project['guidance']['unresolved']:
+                    raise ValueError('feature_guidance_required')
                 if not project['candidate'] or project['answer_summary']['blocking_unanswered']:
                     raise ValueError('delivery_answers_required')
                 if not view['pipeline']['analysis_current']:
@@ -473,6 +519,8 @@ class PipelineWorkspace:
                 spec = {'name': view['project']['name'], 'database': 'sqlite',
                         'requirements': state['confirmation']['snapshot'],
                         'obligations': site_obligations.catalog()['empty_values']}
+                if view['project']['production_guides']:
+                    spec['production_guides'] = copy.deepcopy(view['project']['production_guides'])
                 result = generate(stage, copy.deepcopy(spec), copy.deepcopy(dependencies))
                 from .codex_pipeline import validate_stage as validate_output
                 result = validate_output(result, stage)

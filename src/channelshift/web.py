@@ -24,6 +24,7 @@ ASSETS = {"/": ("studio.html", "text/html; charset=utf-8"), "/app.js": ("app.js"
           "/studio-dom.js": ("studio-dom.js", "text/javascript; charset=utf-8"),
           "/studio-policy.js": ("studio-policy.js", "text/javascript; charset=utf-8"),
           "/studio-account.js": ("studio-account.js", "text/javascript; charset=utf-8"),
+          "/studio-guidance.js": ("studio-guidance.js", "text/javascript; charset=utf-8"),
           "/studio.css": ("studio.css", "text/css; charset=utf-8"),
           "/style.css": ("style.css", "text/css; charset=utf-8"),
           "/delivery": ("studio.html", "text/html; charset=utf-8"),
